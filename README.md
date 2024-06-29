@@ -1,6 +1,6 @@
 # Okrolearn 
 <br>
-![okrolearn-modified](https://github.com/Okerew/okrolearn/assets/93822247/e714895f-8693-4ea1-8028-7a9e3e3c91a1)
+<img src="https://github.com/Okerew/okrolearn/assets/93822247/2c3e95ea-394d-4e29-8b97-13281ee695b7">
 <br>
 
 Machine Learning library created by Okerew
@@ -10,3 +10,4 @@ To build it self as installation is not yet supported, install numpy and then ju
 `from okrolearn.src.okrolearn import *`
 <br>
 Note gpu and jit compilation is not yet supported.
+
