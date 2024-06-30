@@ -13,5 +13,5 @@ You can also just download the okrolearn.py file and import it
 <br>
 `from okrolearn import *`
 <br>
-Note gpu and jit compilation is not yet supported.
+Note gpu and jit compilation are not yet supported.
 
