@@ -1,5 +1,4 @@
-import numpy as np
-from library import BatchNormLayer, L3RegularizationLayer, Tensor
+from okrolearn import BatchNormLayer, L3RegularizationLayer, Tensor, np
 
 def test_batchnorm_l3_layer():
     np.random.seed(0)  # For reproducibility
