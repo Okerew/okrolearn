@@ -9,7 +9,7 @@ To add it as installation is not yet supported, install numpy and then just impo
 <br>
 `from okrolearn.src.okrolearn import *`
 <br>
-You can also just download the okrolearn.py file and imprt it
+You can also just download the okrolearn.py file and import it
 <br>
 `from okrolearn import *`
 <br>
