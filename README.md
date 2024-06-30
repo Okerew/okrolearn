@@ -5,9 +5,13 @@
 
 Machine Learning library created by Okerew
 <br>
-To build it self as installation is not yet supported, install numpy and then just import it by having it in your project directory
+To add it as installation is not yet supported, install numpy and then just import it by having it in your project directory
 <br>
 `from okrolearn.src.okrolearn import *`
+<br>
+You can also just download the okrolearn.py file and imprt it
+<br>
+`from okrolearn import *`
 <br>
 Note gpu and jit compilation is not yet supported.
 
