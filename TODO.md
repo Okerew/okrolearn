@@ -1,2 +1,3 @@
 Cuda support
-JIT support
+<br>
+More feautures
