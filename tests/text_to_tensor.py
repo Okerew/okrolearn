@@ -9,7 +9,6 @@ tensor_to_text = TensorToText(vocabulary)
 input_text = "hello world"
 tensor = text_to_tensor.encode(input_text)
 
-# Use your existing Encoder and Decoder here
 encoder = Encoder(input_dim=len(vocabulary), hidden_dims=[64, 32], output_dim=16)
 decoder = Decoder(input_dim=16, hidden_dims=[32, 64], output_dim=len(vocabulary))
 
