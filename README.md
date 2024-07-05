@@ -1,6 +1,6 @@
 # Okrolearn 
 <br>
-<img src="https://github.com/Okerew/okrolearn/assets/93822247/2c3e95ea-394d-4e29-8b97-13281ee695b7">
+<img src="https://github.com/Okerew/okrolearn/assets/93822247/2c3e95ea-394d-4e29-8b97-13281ee695b7" witdh = "400px", height = "400px">
 <br>
 
 Machine Learning library created by Okerew
