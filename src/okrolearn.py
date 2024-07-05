@@ -1,6 +1,9 @@
 import numpy as np
 import pickle
-from typing import Tuple, Union, Callable, Optional
+from typing import Tuple, Union, Callable, Optional, List
+from scipy import sparse
+import pandas as pd
+import matplotlib.pyplot as plt
 
 
 class Tensor:
@@ -48,7 +51,9 @@ class Tensor:
 
         def backward_fn(grad):
             if self.requires_grad:
-                self.grad = grad * vectorized_func(self.data, derivative=True) if self.grad is None else self.grad + grad * vectorized_func(self.data, derivative=True)
+                self.grad = grad * vectorized_func(self.data,
+                                                   derivative=True) if self.grad is None else self.grad + grad * vectorized_func(
+                    self.data, derivative=True)
 
         out.backward_fn = backward_fn
         return out
@@ -64,6 +69,54 @@ class Tensor:
 
         out.backward_fn = backward_fn
         return out
+
+    def to_numpy(self):
+        return self.data
+
+    def to_sparse(self, format='csr'):
+        """
+        Convert the tensor to a sparse representation.
+
+        Parameters:
+        - format: The sparse matrix format. Options are 'csr', 'csc', 'coo', 'lil', 'dok', 'bsr'.
+                  Default is 'csr' (Compressed Sparse Row).
+
+        Returns:
+        - A scipy sparse matrix in the specified format.
+        """
+        if not isinstance(self.data, np.ndarray):
+            raise ValueError("Tensor data must be a numpy array")
+
+        if self.data.ndim != 2:
+            raise ValueError("Only 2D tensors can be converted to sparse format")
+
+        if format not in ['csr', 'csc', 'coo', 'lil', 'dok', 'bsr']:
+            raise ValueError("Unsupported sparse format")
+
+        # Convert to the specified sparse format
+        sparse_matrix = getattr(sparse, format + '_matrix')(self.data)
+
+        return sparse_matrix
+
+    @staticmethod
+    def from_sparse(sparse_matrix):
+        """
+        Convert a sparse matrix to a Tensor.
+
+        Parameters:
+        - sparse_matrix: A scipy sparse matrix.
+
+        Returns:
+        - A Tensor object.
+        """
+        if not sparse.issparse(sparse_matrix):
+            raise ValueError("Input must be a scipy sparse matrix")
+
+        # Convert sparse matrix to dense numpy array
+        dense_array = sparse_matrix.toarray()
+
+        # Create and return a new Tensor
+        return Tensor(dense_array)
 
     def transpose(self):
         out = Tensor(self.data.T)
@@ -84,7 +137,8 @@ class Tensor:
 
         def backward_fn(grad):
             if self.requires_grad:
-                self.grad = grad.reshape(self.data.shape) if self.grad is None else self.grad + grad.reshape(self.data.shape)
+                self.grad = grad.reshape(self.data.shape) if self.grad is None else self.grad + grad.reshape(
+                    self.data.shape)
 
         reshaped_tensor.backward_fn = backward_fn
         return reshaped_tensor
@@ -97,7 +151,8 @@ class Tensor:
 
         def backward_fn(grad):
             if self.requires_grad:
-                self.grad = grad / np.sqrt(variance + eps) if self.grad is None else self.grad + grad / np.sqrt(variance + eps)
+                self.grad = grad / np.sqrt(variance + eps) if self.grad is None else self.grad + grad / np.sqrt(
+                    variance + eps)
 
         out.backward_fn = backward_fn
         return out
@@ -114,6 +169,246 @@ class Tensor:
 
         out.backward_fn = backward_fn
         return out
+
+    def polynomial_features(self, degree):
+        """
+        Generate polynomial features of the given degree for the tensor.
+        """
+        from itertools import combinations_with_replacement
+
+        n_samples, n_features = self.data.shape
+        combs = [combinations_with_replacement(range(n_features), d) for d in range(degree + 1)]
+        combs = [item for sublist in combs for item in sublist]
+
+        new_data = np.hstack([np.prod(self.data[:, comb], axis=1, keepdims=True) for comb in combs])
+        out = Tensor(new_data)
+
+        def backward_fn(grad):
+            if self.requires_grad:
+                grad_features = np.zeros_like(self.data)
+                for i, comb in enumerate(combs):
+                    partial_grad = grad[:, i][:, None]
+                    for feature_idx in comb:
+                        partial_grad *= self.data[:, feature_idx][:, None]
+                    grad_features[:, comb] += partial_grad
+
+                if self.grad is None:
+                    self.grad = grad_features
+                else:
+                    self.grad += grad_features
+
+        out.backward_fn = backward_fn
+        return out
+
+    def min_max_scale(self, feature_range=(0, 1)):
+        """
+        Scale features to a given range (similar to MinMaxScaler in scikit-learn)
+        """
+        min_val = np.min(self.data, axis=0)
+        max_val = np.max(self.data, axis=0)
+        scaled_data = (self.data - min_val) / (max_val - min_val)
+        scaled_data = scaled_data * (feature_range[1] - feature_range[0]) + feature_range[0]
+        out = Tensor(scaled_data)
+
+        def backward_fn(grad):
+            if self.requires_grad:
+                scale = (max_val - min_val) / (feature_range[1] - feature_range[0])
+                if self.grad is None:
+                    self.grad = grad * scale
+                else:
+                    self.grad += grad * scale
+
+        out.backward_fn = backward_fn
+        return out
+
+    def truncated_svd(self, n_components):
+        """
+        Perform Truncated SVD (similar to TruncatedSVD in scikit-learn)
+        """
+        U, s, Vt = np.linalg.svd(self.data, full_matrices=False)
+        U_truncated = U[:, :n_components]
+        s_truncated = s[:n_components]
+        Vt_truncated = Vt[:n_components, :]
+
+        transformed_data = U_truncated * s_truncated
+        out = Tensor(transformed_data)
+
+        def backward_fn(grad):
+            if self.requires_grad:
+                grad_full = np.dot(grad, Vt_truncated)
+                if self.grad is None:
+                    self.grad = grad_full
+                else:
+                    self.grad += grad_full
+
+        out.backward_fn = backward_fn
+        return out, Tensor(Vt_truncated)
+
+    def svm(self, y, learning_rate=0.001, num_iterations=5000, C=1.0):
+        """
+        Basic Support Vector Machine implementation
+        """
+        if not isinstance(y, Tensor):
+            y = Tensor(y)
+
+        m, n = self.data.shape
+        w = np.zeros(n)
+        b = 0
+
+        for _ in range(num_iterations):
+            for i in range(m):
+                condition = y.data[i] * (np.dot(self.data[i], w) + b) >= 1
+                if condition:
+                    w = w - learning_rate * (2 * (1 / num_iterations) * w)
+                else:
+                    w = w + learning_rate * (y.data[i] * self.data[i] - 2 * (1 / num_iterations) * w)
+                    b = b + learning_rate * y.data[i]
+
+        out = Tensor(w)
+
+        def backward_fn(grad):
+            if self.requires_grad:
+                self.grad = grad * self.data if self.grad is None else self.grad + grad * self.data
+
+        out.backward_fn = backward_fn
+        return out, b
+
+    def logistic_regression(self, y, learning_rate=0.01, num_iterations=1000):
+        """
+        Logistic Regression implementation
+        """
+        if not isinstance(y, Tensor):
+            y = Tensor(y)
+
+        m, n = self.data.shape
+        w = np.zeros(n)
+        b = 0
+
+        def sigmoid(z):
+            return 1 / (1 + np.exp(-z))
+
+        for _ in range(num_iterations):
+            z = np.dot(self.data, w) + b
+            h = sigmoid(z)
+            gradient_w = np.dot(self.data.T, (h - y.data)) / m
+            gradient_b = np.sum(h - y.data) / m
+
+            w -= learning_rate * gradient_w
+            b -= learning_rate * gradient_b
+
+        out = Tensor(w)
+
+        def backward_fn(grad):
+            if self.requires_grad:
+                self.grad = grad * self.data if self.grad is None else self.grad + grad * self.data
+
+        out.backward_fn = backward_fn
+        return out, b
+
+    def random_forest(self, y, n_trees=10, max_depth=None, min_samples_split=2):
+        """
+        Random Forest implementation
+        """
+        if not isinstance(y, Tensor):
+            y = Tensor(y)
+
+        class DecisionTree:
+            def __init__(self, max_depth=None, min_samples_split=2):
+                self.max_depth = max_depth
+                self.min_samples_split = min_samples_split
+                self.tree = None
+                self.classes = np.unique(y.data)
+
+            def build_tree(self, X, y, depth=0):
+                n_samples, n_features = X.shape
+                n_labels = len(np.unique(y))
+
+                # Handle the case where we have no samples
+                if n_samples == 0:
+                    return self.classes[0]  # Return the first class as default
+
+                if (depth == self.max_depth or
+                        n_samples < self.min_samples_split or
+                        n_labels == 1):
+                    return np.bincount(y, minlength=len(self.classes)).argmax()
+
+                feature_idx = np.random.randint(n_features)
+                threshold = np.median(X[:, feature_idx])
+
+                left_mask = X[:, feature_idx] <= threshold
+                right_mask = ~left_mask
+
+                left = self.build_tree(X[left_mask], y[left_mask], depth + 1)
+                right = self.build_tree(X[right_mask], y[right_mask], depth + 1)
+
+                return (feature_idx, threshold, left, right)
+
+            def fit(self, X, y):
+                self.tree = self.build_tree(X, y)
+
+            def predict_sample(self, x, tree):
+                if isinstance(tree, (np.int64, np.int32, int)):
+                    return self.classes[tree]
+                feature_idx, threshold, left, right = tree
+                if x[feature_idx] <= threshold:
+                    return self.predict_sample(x, left)
+                else:
+                    return self.predict_sample(x, right)
+
+            def predict(self, X):
+                return np.array([self.predict_sample(x, self.tree) for x in X])
+
+        forest = []
+        for _ in range(n_trees):
+            tree = DecisionTree(max_depth, min_samples_split)
+            indices = np.random.choice(len(self.data), len(self.data), replace=True)
+            X_sample, y_sample = self.data[indices], y.data[indices]
+            tree.fit(X_sample, y_sample)
+            forest.append(tree)
+
+        def predict(X):
+            predictions = np.array([tree.predict(X) for tree in forest])
+            return np.apply_along_axis(lambda x: np.bincount(x, minlength=len(forest[0].classes)).argmax(), axis=0,
+                                       arr=predictions)
+
+        out = Tensor(predict(self.data))
+
+        def backward_fn(grad):
+            if self.requires_grad:
+                self.grad = np.zeros_like(self.data) if self.grad is None else self.grad
+
+        out.backward_fn = backward_fn
+        return out, forest
+
+    @classmethod
+    def from_pandas(cls, df):
+        """
+        Create a Tensor from a pandas DataFrame.
+
+        Parameters:
+        - df: pandas DataFrame
+
+        Returns:
+        - Tensor object
+        """
+        return cls(df.values)
+
+    def to_pandas(self, columns=None):
+        """
+        Convert the Tensor to a pandas DataFrame.
+
+        Parameters:
+        - columns: list of column names (optional)
+
+        Returns:
+        - pandas DataFrame
+        """
+        if columns is None:
+            return pd.DataFrame(self.data)
+        else:
+            if len(columns) != self.data.shape[1]:
+                raise ValueError("Number of column names must match the number of columns in the data")
+            return pd.DataFrame(self.data, columns=columns)
 
     def split(self, indices_or_sections, axis=0):
         split_data = np.split(self.data, indices_or_sections, axis)
@@ -144,6 +439,192 @@ class Tensor:
             t.backward_fn = lambda grad, i: backward_fn(grad, i)
 
         return split_tensors
+
+    def standardize(self):
+        """
+        Standardize the tensor (zero mean, unit variance)
+        Similar to scikit-learn's StandardScaler
+        """
+        mean = np.mean(self.data, axis=0)
+        std = np.std(self.data, axis=0)
+        standardized_data = (self.data - mean) / (std + 1e-8)  # Add small epsilon to avoid division by zero
+        out = Tensor(standardized_data, requires_grad=True)
+
+        def backward_fn(grad):
+            if self.requires_grad:
+                if self.grad is None:
+                    self.grad = grad / (std + 1e-8)
+                else:
+                    self.grad += grad / (std + 1e-8)
+
+        out.backward_fn = backward_fn
+        return out
+
+    def normalize(self):
+        """
+        Normalize the tensor (zero mean, unit variance)
+        Similar to scikit-learn's StandardScaler
+        """
+        mean = np.mean(self.data, axis=0)
+        std = np.std(self.data, axis=0)
+        normalized_data = (self.data - mean) / (std + 1e-8)
+        out = Tensor(normalized_data, requires_grad=True)
+
+        def backward_fn(grad):
+            if self.requires_grad:
+                if self.grad is None:
+                    self.grad = grad / (std + 1e-8)
+                else:
+                    self.grad += grad / (std + 1e-8)
+
+        out.backward_fn = backward_fn
+        return out
+
+
+    def cross_val_score(self, model_fn, X, y, cv=5):
+        """
+        Perform cross-validation and return the scores.
+
+        Parameters:
+        - model_fn: A function that takes training data and labels, and returns a fitted model.
+                    The model should also have a method `predict` that takes test data and returns predictions.
+        - X: Input data, assumed to be a 2D numpy array.
+        - y: Labels, assumed to be a 1D numpy array.
+        - cv: Number of cross-validation folds (default is 5).
+
+        Returns:
+        - scores: A list of scores for each fold.
+        """
+        n_samples = len(X)
+        indices = np.arange(n_samples)
+        np.random.shuffle(indices)
+
+        fold_sizes = np.full(cv, n_samples // cv, dtype=int)
+        fold_sizes[:n_samples % cv] += 1
+        current = 0
+
+        scores = []
+        for fold_size in fold_sizes:
+            start, stop = current, current + fold_size
+            test_indices = indices[start:stop]
+            train_indices = np.concatenate([indices[:start], indices[stop:]])
+
+            X_train, X_test = X[train_indices], X[test_indices]
+            y_train, y_test = y[train_indices], y[test_indices]
+
+            model = model_fn(X_train, y_train)
+
+            # Ensure predict is called correctly
+            y_pred = model.predict(X_test)
+
+            score = np.mean(y_pred == y_test)
+            scores.append(score)
+
+            current = stop
+
+        return scores
+
+    def pca(self, n_components):
+        """
+        Perform Principal Component Analysis (PCA)
+        """
+        # Center the data
+        mean = np.mean(self.data, axis=0)
+        centered_data = self.data - mean
+
+        # Compute covariance matrix
+        cov_matrix = np.cov(centered_data.T)
+
+        # Compute eigenvectors and eigenvalues
+        eigenvalues, eigenvectors = np.linalg.eig(cov_matrix)
+
+        # Sort eigenvectors by decreasing eigenvalues
+        idx = eigenvalues.argsort()[::-1]
+        eigenvectors = eigenvectors[:, idx]
+
+        # Select top n_components eigenvectors
+        components = eigenvectors[:, :n_components]
+
+        # Project data onto principal components
+        projected_data = np.dot(centered_data, components)
+        out = Tensor(projected_data)
+
+        def backward_fn(grad):
+            if self.requires_grad:
+                self.grad = np.dot(grad, components.T) if self.grad is None else self.grad + np.dot(grad, components.T)
+
+        out.backward_fn = backward_fn
+        return out
+
+    def kmeans(self, n_clusters, max_iter=100):
+        """
+        Perform K-Means clustering with a backward pass
+        """
+        # Randomly initialize centroids
+        centroids = self.data[np.random.choice(self.data.shape[0], n_clusters, replace=False)]
+
+        for _ in range(max_iter):
+            # Assign points to nearest centroid
+            distances = np.sqrt(((self.data[:, np.newaxis, :] - centroids) ** 2).sum(axis=2))
+            labels = np.argmin(distances, axis=1)
+
+            # Update centroids
+            new_centroids = np.array([self.data[labels == k].mean(axis=0) for k in range(n_clusters)])
+
+            # Check for convergence
+            if np.all(centroids == new_centroids):
+                break
+
+            centroids = new_centroids
+
+        # Compute final distances and labels
+        distances = np.sqrt(((self.data[:, np.newaxis, :] - centroids) ** 2).sum(axis=2))
+        labels = np.argmin(distances, axis=1)
+
+        out = Tensor(labels)
+
+        def backward_fn(grad):
+            if self.requires_grad:
+                # Initialize gradient
+                if self.grad is None:
+                    self.grad = np.zeros_like(self.data, dtype=float)  # Ensure gradient is float
+
+                # Compute gradients with respect to the input data
+                for i in range(self.data.shape[0]):
+                    cluster = labels[i]
+                    diff = self.data[i] - centroids[cluster]
+                    self.grad[i] += 2 * diff / len(labels[labels == cluster])
+
+                # Scale the gradients by the incoming gradient
+                self.grad *= grad.reshape(-1, 1)
+
+        out.backward_fn = backward_fn
+        return out, Tensor(centroids)
+
+    def linear_regression(self, y):
+        """
+        Perform simple linear regression
+        """
+        if not isinstance(y, Tensor):
+            y = Tensor(y)
+
+        X = self.data
+        y = y.data
+
+        # Add bias term
+        X_with_bias = np.column_stack((np.ones(X.shape[0]), X))
+
+        # Compute coefficients
+        coeffs = np.linalg.inv(X_with_bias.T @ X_with_bias) @ X_with_bias.T @ y
+
+        out = Tensor(coeffs)
+
+        def backward_fn(grad):
+            if self.requires_grad:
+                self.grad = grad @ X_with_bias if self.grad is None else self.grad + grad @ X_with_bias
+
+        out.backward_fn = backward_fn
+        return out
 
     def space_to_depth(self, block_size):
         if len(self.data.shape) != 4:
@@ -186,7 +667,10 @@ class Tensor:
         def backward_fn(grad):
             unsort_indices = np.argsort(sorted_indices, axis=axis)
             if self.requires_grad:
-                self.grad = np.take_along_axis(grad, unsort_indices, axis=axis) if self.grad is None else self.grad + np.take_along_axis(grad, unsort_indices, axis=axis)
+                self.grad = np.take_along_axis(grad, unsort_indices,
+                                               axis=axis) if self.grad is None else self.grad + np.take_along_axis(grad,
+                                                                                                                   unsort_indices,
+                                                                                                                   axis=axis)
 
         out.backward_fn = backward_fn
         return out, indices
@@ -208,10 +692,369 @@ class Tensor:
             grad_reshaped = grad.reshape((n // groups, groups, h, w))
             grad_transposed = grad_reshaped.transpose((1, 0, 2, 3))
             if self.requires_grad:
-                self.grad = grad_transposed.reshape((n, h, w)) if self.grad is None else self.grad + grad_transposed.reshape((n, h, w))
+                self.grad = grad_transposed.reshape(
+                    (n, h, w)) if self.grad is None else self.grad + grad_transposed.reshape((n, h, w))
 
         out.backward_fn = backward_fn
         return out
+
+    def pixel_shuffle(self, upscale_factor):
+        """
+        Rearrange elements in a tensor of shape (*, C * r^2, H, W) to (*, C, H * r, W * r).
+
+        Args:
+        upscale_factor (int): Factor to increase spatial resolution by.
+
+        Returns:
+        Tensor: Rearranged tensor with increased spatial dimensions.
+        """
+        data = self.data
+
+        # Ensure data is a numpy array
+        if not isinstance(data, np.ndarray):
+            data = np.array(data)
+
+        # Handle different input shapes
+        if len(data.shape) == 3:
+            # If 3D, assume it's (C * r^2, H, W) and add a batch dimension
+            data = np.expand_dims(data, axis=0)
+        elif len(data.shape) != 4:
+            raise ValueError("Input tensor must be 3D (C * r^2, H, W) or 4D (batch_size, C * r^2, H, W)")
+
+        # Ensure channel dimension is second
+        if data.shape[1] % (upscale_factor ** 2) != 0:
+            # If channels are not in the correct position, try to rearrange
+            if data.shape[-1] % (upscale_factor ** 2) == 0:
+                data = np.moveaxis(data, -1, 1)
+            else:
+                raise ValueError("Number of channels must be divisible by upscale_factor^2")
+
+        batch_size, channels, height, width = data.shape
+
+        # Reshape and transpose to get pixels in target positions
+        reshaped = data.reshape(batch_size, channels // (upscale_factor ** 2), upscale_factor, upscale_factor,
+                                height, width)
+        transposed = reshaped.transpose(0, 1, 4, 2, 5, 3)
+
+        # Reshape to target size
+        output_shape = (batch_size, channels // (upscale_factor ** 2), height * upscale_factor, width * upscale_factor)
+        output = transposed.reshape(output_shape)
+
+        out = Tensor(output)
+
+        def backward_fn(grad):
+            if self.requires_grad:
+                # Reverse the operations for the backward pass
+                grad_reshaped = grad.reshape(batch_size, channels // (upscale_factor ** 2), height, upscale_factor,
+                                             width, upscale_factor)
+                grad_transposed = grad_reshaped.transpose(0, 1, 3, 5, 2, 4)
+                grad_output = grad_transposed.reshape(data.shape)
+
+                # If original input was 3D, remove the batch dimension
+                if len(self.data.shape) == 3:
+                    grad_output = grad_output.squeeze(0)
+
+                self.grad = grad_output if self.grad is None else self.grad + grad_output
+
+        out.backward_fn = backward_fn
+        return out
+
+    def plot(self, title=None, xlabel=None, ylabel=None):
+        """
+        Plot the tensor data using matplotlib.
+
+        Parameters:
+        - title: str, optional title for the plot
+        - xlabel: str, optional label for x-axis
+        - ylabel: str, optional label for y-axis
+        """
+        plt.figure(figsize=(10, 6))
+
+        if self.data.ndim == 1:
+            plt.plot(self.data)
+        elif self.data.ndim == 2:
+            plt.imshow(self.data, cmap='viridis')
+            plt.colorbar()
+        else:
+            raise ValueError("Can only plot 1D or 2D tensors")
+
+        if title:
+            plt.title(title)
+        if xlabel:
+            plt.xlabel(xlabel)
+        if ylabel:
+            plt.ylabel(ylabel)
+
+        plt.show()
+
+    def histogram(self, bins=50, title=None, xlabel=None, ylabel=None):
+        """
+        Plot a histogram of the tensor data.
+
+        Parameters:
+        - bins: int, number of bins for the histogram
+        - title: str, optional title for the plot
+        - xlabel: str, optional label for x-axis
+        - ylabel: str, optional label for y-axis
+        """
+        plt.figure(figsize=(10, 6))
+        plt.hist(self.data.flatten(), bins=bins)
+
+        if title:
+            plt.title(title)
+        if xlabel:
+            plt.xlabel(xlabel)
+        if ylabel:
+            plt.ylabel(ylabel)
+
+        plt.show()
+
+    def decision_tree(self, y, max_depth=None):
+        """
+        Custom decision tree implementation
+        """
+
+        class Node:
+            def __init__(self, feature=None, threshold=None, left=None, right=None, value=None):
+                self.feature = feature
+                self.threshold = threshold
+                self.left = left
+                self.right = right
+                self.value = value
+
+        def gini_impurity(y):
+            _, counts = np.unique(y, return_counts=True)
+            probabilities = counts / len(y)
+            return 1 - np.sum(probabilities ** 2)
+
+        def split(X, y, feature, threshold):
+            left_mask = X[:, feature] <= threshold
+            right_mask = ~left_mask
+            return X[left_mask], y[left_mask], X[right_mask], y[right_mask]
+
+        def build_tree(X, y, depth=0):
+            n_samples, n_features = X.shape
+            n_classes = len(np.unique(y))
+
+            if depth == max_depth or n_samples < 2 or n_classes == 1:
+                return Node(value=np.argmax(np.bincount(y.flatten().astype(int))))
+
+            best_gini = float('inf')
+            best_feature = None
+            best_threshold = None
+
+            for feature in range(n_features):
+                thresholds = np.unique(X[:, feature])
+                for threshold in thresholds:
+                    _, y_left, _, y_right = split(X, y, feature, threshold)
+                    gini = (len(y_left) * gini_impurity(y_left) + len(y_right) * gini_impurity(y_right)) / n_samples
+                    if gini < best_gini:
+                        best_gini = gini
+                        best_feature = feature
+                        best_threshold = threshold
+
+            if best_feature is None:
+                return Node(value=np.argmax(np.bincount(y.astype(int))))
+
+            X_left, y_left, X_right, y_right = split(X, y, best_feature, best_threshold)
+            left = build_tree(X_left, y_left, depth + 1)
+            right = build_tree(X_right, y_right, depth + 1)
+
+            return Node(feature=best_feature, threshold=best_threshold, left=left, right=right)
+
+        def predict_sample(x, node):
+            if node.value is not None:
+                return node.value
+            if x[node.feature] <= node.threshold:
+                return predict_sample(x, node.left)
+            return predict_sample(x, node.right)
+
+        root = build_tree(self.data, y)
+
+        predictions = np.array([predict_sample(x, root) for x in self.data], dtype=np.int64)
+
+        out = Tensor(predictions)
+
+        def backward_fn(grad):
+            if self.requires_grad:
+                # Decision trees don't have a straightforward gradient
+                # This is a placeholder for gradient computation
+                self.grad = np.zeros_like(self.data) if self.grad is None else self.grad
+
+        out.backward_fn = backward_fn
+        return out, root
+
+    def gradient_boosting(self, y, n_estimators=100, learning_rate=0.1, max_depth=3):
+        """
+        Custom gradient boosting implementation
+        """
+        y = y.reshape(-1, 1)
+        trees = []
+
+        # Initial prediction
+        F = np.zeros_like(y, dtype=float)
+
+        for _ in range(n_estimators):
+            residuals = y - F
+            tree, _ = self.decision_tree(residuals, max_depth=max_depth)
+            trees.append(tree)
+            F += learning_rate * tree.data.reshape(-1, 1)
+
+        predictions = F.ravel()
+        out = Tensor(predictions)
+
+        def backward_fn(grad):
+            if self.requires_grad:
+                # Gradient boosting doesn't have a straightforward gradient
+                # This is a placeholder for gradient computation
+                self.grad = np.zeros_like(self.data) if self.grad is None else self.grad
+
+        out.backward_fn = backward_fn
+        return out, trees
+
+    def confusion_matrix(self, y_true):
+        """
+        Compute confusion matrix
+        """
+        y_pred = self.data
+        classes = np.unique(np.concatenate((y_true, y_pred)))
+        n_classes = len(classes)
+        cm = np.zeros((n_classes, n_classes), dtype=int)
+
+        for i in range(len(y_true)):
+            cm[np.where(classes == y_true[i])[0], np.where(classes == y_pred[i])[0]] += 1
+
+        return Tensor(cm)
+
+    def f1_score(self, y_true):
+        """
+        Compute F1 score
+        """
+        cm = self.confusion_matrix(y_true).data
+        precision = np.diag(cm) / np.sum(cm, axis=0)
+        recall = np.diag(cm) / np.sum(cm, axis=1)
+        f1 = 2 * (precision * recall) / (precision + recall)
+        return Tensor(np.nan_to_num(f1))
+
+    def recall(self, y_true):
+        """
+        Compute recall
+        """
+        cm = self.confusion_matrix(y_true).data
+        recall = np.diag(cm) / np.sum(cm, axis=1)
+        return Tensor(np.nan_to_num(recall))
+
+    def precision(self, y_true):
+        """
+        Compute precision
+        """
+        cm = self.confusion_matrix(y_true).data
+        precision = np.diag(cm) / np.sum(cm, axis=0)
+        return Tensor(np.nan_to_num(precision))
+
+    def bagging(self, y, n_estimators=10, sample_size=None):
+        """
+        Bagging classifier implementation
+        """
+        if sample_size is None:
+            sample_size = len(self.data)
+
+        trees = []
+        for _ in range(n_estimators):
+            indices = np.random.choice(len(self.data), size=sample_size, replace=True)
+            X_sample, y_sample = self.data[indices], y[indices]
+            tree, _ = Tensor(X_sample).decision_tree(y_sample)
+            trees.append(tree)
+
+        def predict(X):
+            predictions = np.array([tree.data for tree in trees])
+            return np.apply_along_axis(lambda x: np.argmax(np.bincount(x)), axis=0, arr=predictions)
+
+        out = Tensor(predict(self.data))
+
+        def backward_fn(grad):
+            if self.requires_grad:
+                self.grad = np.zeros_like(self.data) if self.grad is None else self.grad
+
+        out.backward_fn = backward_fn
+        return out, trees
+
+    def preprocess(self, method='standardize'):
+        """
+        Preprocess the tensor data using various methods.
+
+        Parameters:
+        - method: str, preprocessing method to use. Options are 'standardize', 'normalize', 'min_max_scale'
+
+        Returns:
+        - Tensor: Preprocessed tensor
+        """
+        if method == 'standardize':
+            return self.standardize()
+        elif method == 'normalize':
+            return self.normalize()
+        elif method == 'min_max_scale':
+            return self.min_max_scale()
+        else:
+            raise ValueError("Invalid preprocessing method. Choose 'standardize', 'normalize', or 'min_max_scale'.")
+
+    def cat(tensors, axis=0):
+        """
+        Concatenates a list of tensors along a specified axis.
+
+        Parameters:
+        - tensors: list of Tensor objects to concatenate.
+        - axis: int, the axis along which to concatenate the tensors.
+
+        Returns:
+        - Tensor: A new tensor resulting from concatenating the input tensors.
+        """
+        # Check if all tensors require gradients
+        requires_grad = any(tensor.requires_grad for tensor in tensors)
+
+        # Extract the numpy arrays from the tensors
+        data = [tensor.data for tensor in tensors]
+
+        # Use numpy to concatenate the arrays
+        concatenated_data = np.concatenate(data, axis=axis)
+
+        # Create a new tensor from the concatenated data
+        result = Tensor(concatenated_data, requires_grad=requires_grad)
+
+        if requires_grad:
+            def backward_fn(grad):
+                # This function will split the gradient back to the original tensors
+                grad_parts = np.split(grad, indices_or_sections=[tensor.data.shape[axis] for tensor in tensors[:-1]],
+                                      axis=axis)
+                for tensor, grad_part in zip(tensors, grad_parts):
+                    if tensor.requires_grad:
+                        if tensor.grad is None:
+                            tensor.grad = grad_part
+                        else:
+                            tensor.grad += grad_part
+
+            # Assign the custom backward function to handle gradients for concatenation
+            result.backward_fn = backward_fn
+
+        return result
+
+    def full(shape, fill_value, requires_grad=False):
+        """
+        Returns a new tensor of given shape filled with fill_value.
+
+        Parameters:
+        - shape: int or tuple of ints, defining the shape of the new tensor.
+        - fill_value: scalar, value to fill the new tensor with.
+        - requires_grad: bool, whether the new tensor requires gradient.
+
+        Returns:
+        - Tensor: A new tensor with the specified shape and fill value.
+        """
+        # Use numpy to create an array filled with the fill value
+        data = np.full(shape, fill_value)
+
+        # Create and return a new Tensor object
+        return Tensor(data, requires_grad=requires_grad)
 
     def __repr__(self):
         return f"Tensor({self.data})"
@@ -220,6 +1063,57 @@ class Tensor:
         if self.backward_fn is None:
             raise RuntimeError("No backward function defined for this tensor.")
         self.backward_fn(np.ones_like(self.data))
+
+
+class Dataset:
+    def __init__(self, data: Union[np.ndarray, List[np.ndarray]]):
+        if isinstance(data, np.ndarray):
+            self.data = [data]
+        elif isinstance(data, list) and all(isinstance(item, np.ndarray) for item in data):
+            self.data = data
+        else:
+            raise ValueError("Data must be a numpy array or a list of numpy arrays")
+
+        self.tensors = [Tensor(arr) for arr in self.data]
+
+    def __len__(self):
+        return len(self.data)
+
+    def __getitem__(self, idx):
+        return self.tensors[idx]
+
+    def to_tensors(self) -> List[Tensor]:
+        return self.tensors
+
+    def batch(self, batch_size: int) -> List[List[Tensor]]:
+        batches = []
+        for i in range(0, len(self), batch_size):
+            batches.append(self.tensors[i:i + batch_size])
+        return batches
+
+    def shuffle(self):
+        indices = np.random.permutation(len(self))
+        self.data = [self.data[i] for i in indices]
+        self.tensors = [self.tensors[i] for i in indices]
+
+    def split(self, split_ratio: float) -> Tuple['Dataset', 'Dataset']:
+        split_idx = int(len(self) * split_ratio)
+        return Dataset(self.data[:split_idx]), Dataset(self.data[split_idx:])
+
+    @classmethod
+    def from_tensor_list(cls, tensor_list: List[Tensor]):
+        return cls([tensor.data for tensor in tensor_list])
+
+    @classmethod
+    def from_numpy(cls, *arrays):
+        return cls(list(arrays))
+
+    def apply(self, func):
+        self.data = [func(arr) for arr in self.data]
+        self.tensors = [Tensor(arr) for arr in self.data]
+
+    def __repr__(self):
+        return f"Dataset(num_tensors={len(self)}, shapes={[arr.shape for arr in self.data]})"
 
 
 class DenseLayer:
@@ -246,7 +1140,7 @@ class DenseLayer:
         self.weights.grad = dL_dweights.data if self.weights.grad is None else self.weights.grad + dL_dweights.data
         self.biases.grad = dL_dbiases if self.biases.grad is None else self.biases.grad + dL_dbiases
         self.inputs.backward_fn = lambda grad: grad + dL_dinputs.data if self.inputs.backward_fn is None else lambda \
-            x: self.inputs.backward_fn(x) + dL_dinputs.data
+                x: self.inputs.backward_fn(x) + dL_dinputs.data
 
         self.weights.data -= lr * self.weights.grad
         self.biases.data -= lr * self.biases.grad
@@ -288,7 +1182,7 @@ class ELUActivationLayer:
         dL_dinputs = dL_dout * self.inputs.apply(elu_derivative)
         self.inputs.grad = dL_dinputs.data if self.inputs.grad is None else self.inputs.grad + dL_dinputs.data  # Add the dL_dinputs to the grad
         self.inputs.backward_fn = lambda grad: grad + dL_dinputs.data if self.inputs.backward_fn is None else lambda \
-            x: self.inputs.backward_fn(x) + dL_dinputs.data  # Add the dL_dinputs to the backward function
+                x: self.inputs.backward_fn(x) + dL_dinputs.data  # Add the dL_dinputs to the backward function
         return dL_dinputs
 
     def get_params(self):
@@ -316,7 +1210,7 @@ class ReLUActivationLayer:
 
         self.inputs.grad = dL_dinputs.data if self.inputs.grad is None else self.inputs.grad + dL_dinputs.data
         self.inputs.backward_fn = lambda grad: grad + dL_dinputs.data if self.inputs.backward_fn is None else lambda \
-            x: self.inputs.backward_fn(x) + dL_dinputs.data  # Add the dL_dinputs to the backward function
+                x: self.inputs.backward_fn(x) + dL_dinputs.data  # Add the dL_dinputs to the backward function
 
         return dL_dinputs
 
@@ -350,7 +1244,7 @@ class LeakyReLUActivationLayer:
 
         self.inputs.grad = dL_dinputs.data if self.inputs.grad is None else self.inputs.grad + dL_dinputs.data
         self.inputs.backward_fn = lambda grad: grad + dL_dinputs.data if self.inputs.backward_fn is None else lambda \
-            x: self.inputs.backward_fn(x) + dL_dinputs.data
+                x: self.inputs.backward_fn(x) + dL_dinputs.data
 
         return dL_dinputs
 
@@ -457,7 +1351,7 @@ class SoftmaxActivationLayer:
                 for k in range(num_classes):
                     if j == k:
                         jacobians[i, j, k] = self.outputs.data[i, j] * (
-                                    1 - self.outputs.data[i, k])  # jacobian is equal to outputs * (1 - outputs)
+                                1 - self.outputs.data[i, k])  # jacobian is equal to outputs * (1 - outputs)
                     else:
                         jacobians[i, j, k] = -self.outputs.data[i, j] * self.outputs.data[
                             i, k]  # jacobian is equal to -outputs * outputs
@@ -698,7 +1592,7 @@ class Conv1DLayer:
 
         self.inputs.grad = dL_dinputs if self.inputs.grad is None else self.inputs.grad + dL_dinputs
         self.inputs.backward_fn = lambda grad: grad + dL_dinputs if self.inputs.backward_fn is None else lambda \
-            x: self.inputs.backward_fn(x) + dL_dinputs
+                x: self.inputs.backward_fn(x) + dL_dinputs
 
         return Tensor(dL_dinputs)
 
@@ -821,7 +1715,7 @@ class Conv2DLayer:
         self.filters.grad = dL_dfilters if self.filters.grad is None else self.filters.grad + dL_dfilters
         self.biases.grad = dL_dbiases if self.biases.grad is None else self.biases.grad + dL_dbiases
         self.inputs.backward_fn = lambda grad: grad + dL_dinputs if self.inputs.backward_fn is None else lambda \
-            x: self.inputs.backward_fn(x) + dL_dinputs
+                x: self.inputs.backward_fn(x) + dL_dinputs
 
         self.filters.data -= lr * self.filters.grad
         self.biases.data -= lr * self.biases.grad
@@ -840,7 +1734,7 @@ class Conv2DLayer:
         dL_dinputs = np.zeros((batch_size, self.in_channels, in_height, in_width))
 
         padded_dL_dout = np.pad(dL_dout.data, (
-        (0, 0), (0, 0), (self.padding[0], self.padding[0]), (self.padding[1], self.padding[1])), mode='constant')
+            (0, 0), (0, 0), (self.padding[0], self.padding[0]), (self.padding[1], self.padding[1])), mode='constant')
 
         for i in range(in_height):
             for j in range(in_width):
@@ -867,7 +1761,7 @@ class Conv2DLayer:
         self.filters.grad = dL_dfilters if self.filters.grad is None else self.filters.grad + dL_dfilters
         self.biases.grad = dL_dbiases if self.biases.grad is None else self.biases.grad + dL_dbiases
         self.inputs.backward_fn = lambda grad: grad + dL_dinputs if self.inputs.backward_fn is None else lambda \
-            x: self.inputs.backward_fn(x) + dL_dinputs
+                x: self.inputs.backward_fn(x) + dL_dinputs
 
         self.filters.data -= lr * self.filters.grad
         self.biases.data -= lr * self.biases.grad
@@ -983,7 +1877,7 @@ class Conv3DLayer:
 
         self.inputs.grad = dL_dinputs if self.inputs.grad is None else self.inputs.grad + dL_dinputs
         self.inputs.backward_fn = lambda grad: grad + dL_dinputs if self.inputs.backward_fn is None else lambda \
-            x: self.inputs.backward_fn(x) + dL_dinputs
+                x: self.inputs.backward_fn(x) + dL_dinputs
 
         return Tensor(dL_dinputs)
 
@@ -1174,7 +2068,7 @@ class BatchNormLayer:
         self.gamma.grad = dL_dgamma if self.gamma.grad is None else self.gamma.grad + dL_dgamma
         self.beta.grad = dL_dbeta if self.beta.grad is None else self.beta.grad + dL_dbeta
         self.inputs.backward_fn = lambda grad: grad + dL_dx if self.inputs.backward_fn is None else lambda \
-            x: self.inputs.backward_fn(x) + dL_dx
+                x: self.inputs.backward_fn(x) + dL_dx
 
         self.gamma.data -= lr * self.gamma.grad
         self.beta.data -= lr * self.beta.grad
@@ -1259,7 +2153,7 @@ class InstanceNormLayer:
         self.gamma.grad = dL_dgamma if self.gamma.grad is None else self.gamma.grad + dL_dgamma
         self.beta.grad = dL_dbeta if self.beta.grad is None else self.beta.grad + dL_dbeta
         self.inputs.backward_fn = lambda grad: grad + dL_dx if self.inputs.backward_fn is None else lambda \
-            x: self.inputs.backward_fn(x) + dL_dx
+                x: self.inputs.backward_fn(x) + dL_dx
 
         self.gamma.data -= lr * self.gamma.grad
         self.beta.data -= lr * self.beta.grad
@@ -1310,7 +2204,7 @@ class DropoutLayer:
 
         self.inputs.grad = dL_dinputs if self.inputs.grad is None else self.inputs.grad + dL_dinputs
         self.inputs.backward_fn = lambda grad: grad + dL_dinputs if self.inputs.backward_fn is None else lambda \
-            x: self.inputs.backward_fn(x) + dL_dinputs
+                x: self.inputs.backward_fn(x) + dL_dinputs
 
         return Tensor(dL_dinputs)
 
@@ -1348,7 +2242,7 @@ class CrossEntropyLoss:
 
         self.outputs.grad = dL_doutputs.data if self.outputs.grad is None else self.outputs.grad + dL_doutputs.data
         self.outputs.backward_fn = lambda grad: grad + dL_doutputs.data if self.outputs.backward_fn is None else lambda \
-            x: self.outputs.backward_fn(x) + dL_doutputs.data
+                x: self.outputs.backward_fn(x) + dL_doutputs.data
 
         return dL_doutputs
 
@@ -1480,12 +2374,13 @@ class LSTMLayer:
 
         self.prev_hidden.grad = dL_dprev_h if self.prev_hidden.grad is None else self.prev_hidden.grad + dL_dprev_h
         self.prev_hidden.backward_fn = lambda \
-            grad: grad + dL_dprev_h if self.prev_hidden.backward_fn is None else lambda x: self.prev_hidden.backward_fn(
+                grad: grad + dL_dprev_h if self.prev_hidden.backward_fn is None else lambda \
+            x: self.prev_hidden.backward_fn(
             x) + dL_dprev_h
 
         self.prev_cell.grad = dL_dprev_c if self.prev_cell.grad is None else self.prev_cell.grad + dL_dprev_c
         self.prev_cell.backward_fn = lambda grad: grad + dL_dprev_c if self.prev_cell.backward_fn is None else lambda \
-            x: self.prev_cell.backward_fn(x) + dL_dprev_c
+                x: self.prev_cell.backward_fn(x) + dL_dprev_c
 
         return Tensor(dL_dprev_h), Tensor(dL_dprev_c)
 
@@ -1582,12 +2477,13 @@ class GRULayer:
 
         self.prev_hidden.grad = dL_dprev_h if self.prev_hidden.grad is None else self.prev_hidden.grad + dL_dprev_h
         self.prev_hidden.backward_fn = lambda \
-            grad: grad + dL_dprev_h if self.prev_hidden.backward_fn is None else lambda x: self.prev_hidden.backward_fn(
+                grad: grad + dL_dprev_h if self.prev_hidden.backward_fn is None else lambda \
+            x: self.prev_hidden.backward_fn(
             x) + dL_dprev_h
 
         self.inputs.grad = dL_dx if self.inputs.grad is None else self.inputs.grad + dL_dx
         self.inputs.backward_fn = lambda grad: grad + dL_dx if self.inputs.backward_fn is None else lambda \
-            x: self.inputs.backward_fn(x) + dL_dx
+                x: self.inputs.backward_fn(x) + dL_dx
 
         return Tensor(dL_dx), Tensor(dL_dprev_h)
 
@@ -1733,7 +2629,7 @@ class MaxPoolingLayer:
 
         self.inputs.grad = dL_dinputs if self.inputs.grad is None else self.inputs.grad + dL_dinputs
         self.inputs.backward_fn = lambda grad: grad + dL_dinputs if self.inputs.backward_fn is None else lambda \
-            x: self.inputs.backward_fn(x) + dL_dinputs
+                x: self.inputs.backward_fn(x) + dL_dinputs
 
         return Tensor(dL_dinputs)
 
@@ -1786,8 +2682,70 @@ class AveragePoolingLayer:
 
         self.inputs.grad = dL_dinputs if self.inputs.grad is None else self.inputs.grad + dL_dinputs
         self.inputs.backward_fn = lambda grad: grad + dL_dinputs if self.inputs.backward_fn is None else lambda \
-            x: self.inputs.backward_fn(x) + dL_dinputs
+                x: self.inputs.backward_fn(x) + dL_dinputs
 
+        return Tensor(dL_dinputs)
+
+    def get_params(self):
+        return None
+
+    def set_params(self, params):
+        pass
+
+
+
+class UnpoolingLayer:
+    """
+    Parameters:
+    self.inputs = the inputs
+    self.output = the output
+    self.pool_size = the pool size
+    self.stride = the stride
+    Explanation:
+    Unpooling layer, reverse of max pooling
+    """
+    def __init__(self, pool_size=2, stride=2):
+        self.pool_size = pool_size
+        self.stride = stride
+        self.max_indices = None
+
+    def forward(self, inputs):
+        batch_size, channels, height, width = inputs.data.shape
+        unpooled_height = (height - 1) * self.stride + self.pool_size
+        unpooled_width = (width - 1) * self.stride + self.pool_size
+        
+        output = np.zeros((batch_size, channels, unpooled_height, unpooled_width))
+        
+        for i in range(height):
+            for j in range(width):
+                h_start = i * self.stride
+                h_end = h_start + self.pool_size
+                w_start = j * self.stride
+                w_end = w_start + self.pool_size
+                output[:, :, h_start:h_end, w_start:w_end] = inputs.data[:, :, i:i+1, j:j+1]
+        
+        self.inputs = inputs
+        self.output = Tensor(output)
+        return self.output
+
+    def backward(self, dL_dout: Tensor, lr: float = None):
+        batch_size, channels, unpooled_height, unpooled_width = dL_dout.data.shape
+        height = (unpooled_height - self.pool_size) // self.stride + 1
+        width = (unpooled_width - self.pool_size) // self.stride + 1
+        
+        dL_dinputs = np.zeros((batch_size, channels, height, width))
+        
+        for i in range(height):
+            for j in range(width):
+                h_start = i * self.stride
+                h_end = h_start + self.pool_size
+                w_start = j * self.stride
+                w_end = w_start + self.pool_size
+                dL_dinputs[:, :, i, j] = np.sum(dL_dout.data[:, :, h_start:h_end, w_start:w_end], axis=(2, 3))
+        
+        self.inputs.grad = dL_dinputs if self.inputs.grad is None else self.inputs.grad + dL_dinputs
+        self.inputs.backward_fn = lambda grad: grad + dL_dinputs if self.inputs.backward_fn is None else lambda x: self.inputs.backward_fn(x) + dL_dinputs
+        
         return Tensor(dL_dinputs)
 
     def get_params(self):
@@ -1943,7 +2901,7 @@ class MeanSquaredLogarithmicError:
     def backward(self, outputs: Tensor, targets: Tensor):
         epsilon = 1e-8
         grad = 2 * (np.log(outputs.data + 1 + epsilon) - np.log(targets.data + 1 + epsilon)) / (
-                    outputs.data + 1 + epsilon)
+                outputs.data + 1 + epsilon)
         return Tensor(grad / targets.data.size)
 
 
@@ -2042,7 +3000,7 @@ class ZeroPaddingLayer(PaddingLayer):
 
         self.inputs.grad = dL_dinputs if self.inputs.grad is None else self.inputs.grad + dL_dinputs
         self.inputs.backward_fn = lambda grad: grad + dL_dinputs if self.inputs.backward_fn is None else lambda \
-            x: self.inputs.backward_fn(x) + dL_dinputs
+                x: self.inputs.backward_fn(x) + dL_dinputs
 
         return Tensor(dL_dinputs)
 
@@ -2061,7 +3019,7 @@ class ReflectionPaddingLayer(PaddingLayer):
 
         self.inputs.grad = dL_dinputs if self.inputs.grad is None else self.inputs.grad + dL_dinputs
         self.inputs.backward_fn = lambda grad: grad + dL_dinputs if self.inputs.backward_fn is None else lambda \
-            x: self.inputs.backward_fn(x) + dL_dinputs
+                x: self.inputs.backward_fn(x) + dL_dinputs
 
         return Tensor(dL_dinputs)
 
@@ -2077,7 +3035,7 @@ class LinearActivationLayer:
 
         self.inputs.grad = dL_dinputs if self.inputs.grad is None else self.inputs.grad + dL_dinputs
         self.inputs.backward_fn = lambda grad: grad + dL_dinputs if self.inputs.backward_fn is None else lambda \
-            x: self.inputs.backward_fn(x) + dL_dinputs
+                x: self.inputs.backward_fn(x) + dL_dinputs
 
         return Tensor(dL_dinputs)
 
@@ -2134,9 +3092,9 @@ class BilinearLayer:
         self.input2.grad = dL_dinput2 if self.input2.grad is None else self.input2.grad + dL_dinput2
 
         self.input1.backward_fn = lambda grad: grad + dL_dinput1 if self.input1.backward_fn is None else lambda \
-            x: self.input1.backward_fn(x) + dL_dinput1
+                x: self.input1.backward_fn(x) + dL_dinput1
         self.input2.backward_fn = lambda grad: grad + dL_dinput2 if self.input2.backward_fn is None else lambda \
-            x: self.input2.backward_fn(x) + dL_dinput2
+                x: self.input2.backward_fn(x) + dL_dinput2
 
         return Tensor(dL_dinput1), Tensor(dL_dinput2)
 
@@ -2247,10 +3205,6 @@ class ScaledDotProductAttention:
     attention_weights: attention weights
     """
 
-    def softmax(self, x):
-        e = np.exp(x - np.max(x))
-        return e / np.sum(e, axis=1, keepdims=True)
-
     def __init__(self, d_model):
         self.d_model = d_model
         self.scale = np.sqrt(d_model)
@@ -2273,7 +3227,7 @@ class ScaledDotProductAttention:
     def backward(self, dL_dout: Tensor, lr: float):
         dL_dV = self.attention_weights.transpose().dot(dL_dout)
         dL_dattention_weights = dL_dout.dot(self.V.transpose())
-        dL_dattention_scores = dL_dattention_weights * (self.attention_weights * (1 - self.attention_weights))
+        dL_dattention_scores = dL_dattention_weights * (self.attention_weights * (1 - self.attention_weights.data))
         dL_dattention_scores = dL_dattention_scores * (1 / self.scale)
         dL_dQ = dL_dattention_scores.dot(self.K)
         dL_dK = dL_dattention_scores.transpose().dot(self.Q)
@@ -2408,8 +3362,300 @@ class PairwiseDistance:
         pass
 
 
+class Encoder:
+    """
+    Params:
+    input_dim: int
+    hidden_dims: List[int]
+    output_dim: int
+    """
+
+    def __init__(self, input_dim: int, hidden_dims: List[int], output_dim: int):
+        self.layers = []
+        dims = [input_dim] + hidden_dims + [output_dim]
+
+        for i in range(len(dims) - 1):
+            self.layers.append({
+                'W': Tensor(np.random.randn(dims[i], dims[i + 1]) * 0.01),
+                'b': Tensor(np.zeros((1, dims[i + 1])))
+            })
+
+    def forward(self, x: Tensor) -> Tensor:
+        for layer in self.layers[:-1]:
+            x = x.dot(layer['W']).__add__(layer['b']).apply(lambda x: np.maximum(0, x))
+
+        # Last layer without activation
+        x = x.dot(self.layers[-1]['W']).__add__(self.layers[-1]['b'])
+        return x
+
+    def parameters(self) -> List[Tensor]:
+        return [param for layer in self.layers for param in layer.values()]
+
+
+class Decoder:
+    """
+    Params:
+    input_dim: int
+    hidden_dims: List[int]
+    output_dim: int
+    Explanations:
+    input_dim: input dimension of the data
+    hidden_dims: list of hidden dimensions
+    output_dim: output dimension of the data
+    """
+
+    def __init__(self, input_dim: int, hidden_dims: List[int], output_dim: int):
+        self.layers = []
+        dims = [input_dim] + hidden_dims + [output_dim]
+        for i in range(len(dims) - 1):
+            self.layers.append({
+                'W': Tensor(np.random.randn(dims[i], dims[i + 1]) * 0.01),
+                'b': Tensor(np.zeros((1, dims[i + 1])))
+            })
+
+    def forward(self, x: Tensor) -> Tensor:
+        for layer in self.layers[:-1]:
+            x = x.dot(layer['W']).__add__(layer['b']).apply(lambda x: np.maximum(0, x))  # ReLU activation
+        # Last layer with sigmoid activation for output between 0 and 1
+        x = x.dot(self.layers[-1]['W']).__add__(self.layers[-1]['b']).apply(lambda x: 1 / (1 + np.exp(-x)))
+        return x
+
+    def parameters(self) -> List[Tensor]:
+        return [param for layer in self.layers for param in layer.values()]
+
+
+class TransformerEncoder:
+    """
+    Params:
+    input_dim: int
+    num_heads: int
+    ff_dim: int
+    num_layers: int
+    """
+
+    def __init__(self, input_dim: int, num_heads: int, ff_dim: int, num_layers: int):
+        self.input_dim = input_dim
+        self.num_heads = num_heads
+        self.ff_dim = ff_dim
+        self.num_layers = num_layers
+
+        self.layers = []
+        for _ in range(num_layers):
+            self.layers.append({
+                'attention': MultiHeadAttention(input_dim, num_heads),
+                'norm1': LayerNorm(input_dim),
+                'ff': FeedForward(input_dim, ff_dim),
+                'norm2': LayerNorm(input_dim)
+            })
+
+    def forward(self, x: Tensor) -> Tensor:
+        for layer in self.layers:
+            # Self-attention
+            attention_output = layer['attention'].forward(x, x, x)
+            x = x + attention_output
+            x = layer['norm1'].forward(x)
+
+            # Feed-forward
+            ff_output = layer['ff'].forward(x)
+            x = x + ff_output
+            x = layer['norm2'].forward(x)
+
+        return x
+
+    def parameters(self) -> List[Tensor]:
+        return [param for layer in self.layers for module in layer.values() for param in module.parameters()]
+
+
+class TransformerDecoder:
+    """
+    Params:
+    input_dim: int
+    num_heads: int
+    ff_dim: int
+    num_layers: int
+    output_dim: int
+    """
+
+    def __init__(self, input_dim: int, num_heads: int, ff_dim: int, num_layers: int, output_dim: int):
+        self.input_dim = input_dim
+        self.num_heads = num_heads
+        self.ff_dim = ff_dim
+        self.num_layers = num_layers
+        self.output_dim = output_dim
+
+        self.layers = []
+        for _ in range(num_layers):
+            self.layers.append({
+                'self_attention': MultiHeadAttention(input_dim, num_heads),
+                'norm1': LayerNorm(input_dim),
+                'cross_attention': MultiHeadAttention(input_dim, num_heads),
+                'norm2': LayerNorm(input_dim),
+                'ff': FeedForward(input_dim, ff_dim),
+                'norm3': LayerNorm(input_dim)
+            })
+
+        self.output_layer = Linear(input_dim, output_dim)
+
+    def forward(self, x: Tensor, encoder_output: Tensor) -> Tensor:
+        for layer in self.layers:
+            # Self-attention
+            self_attention_output = layer['self_attention'].forward(x, x, x)
+            x = x + self_attention_output
+            x = layer['norm1'].forward(x)
+
+            # Cross-attention
+            cross_attention_output = layer['cross_attention'].forward(x, encoder_output, encoder_output)
+            x = x + cross_attention_output
+            x = layer['norm2'].forward(x)
+
+            # Feed-forward
+            ff_output = layer['ff'].forward(x)
+            x = x + ff_output
+            x = layer['norm3'].forward(x)
+
+        return self.output_layer.forward(x)
+
+    def parameters(self) -> List[Tensor]:
+        params = [param for layer in self.layers for module in layer.values() for param in module.parameters()]
+        params.extend(self.output_layer.parameters())
+        return params
+
+
+class MultiHeadAttention:
+    """
+    Params:
+    input_dim: int
+    num_heads: int
+    head_dim = input_dim // num_heads
+    Explanations:
+    - input_dim: Dimensionality of the input tensor
+    - num_heads: Number of attention heads
+    - head_dim: Dimensionality of each attention head
+    """
+
+    def __init__(self, input_dim: int, num_heads: int):
+        self.input_dim = input_dim
+        self.num_heads = num_heads
+        self.head_dim = input_dim // num_heads
+
+        # Initialize weights
+        self.W_q = Tensor(np.random.randn(input_dim, input_dim) * np.sqrt(2.0 / (2 * input_dim)))
+        self.W_k = Tensor(np.random.randn(input_dim, input_dim) * np.sqrt(2.0 / (2 * input_dim)))
+        self.W_v = Tensor(np.random.randn(input_dim, input_dim) * np.sqrt(2.0 / (2 * input_dim)))
+        self.W_o = Tensor(np.random.randn(input_dim, input_dim) * np.sqrt(2.0 / (2 * input_dim)))
+
+    def split_heads(self, x: np.ndarray) -> np.ndarray:
+        batch_size, seq_length, _ = x.shape
+        return x.reshape(batch_size, seq_length, self.num_heads, self.head_dim).transpose(0, 2, 1, 3)
+
+    def forward(self, query: Tensor, key: Tensor, value: Tensor) -> Tensor:
+        batch_size, seq_length, _ = query.data.shape
+
+        # Compute Q, K, V
+        q = self.split_heads(np.dot(query.data, self.W_q.data))
+        k = self.split_heads(np.dot(key.data, self.W_k.data))
+        v = self.split_heads(np.dot(value.data, self.W_v.data))
+
+        # Compute attention scores
+        attention_scores = np.matmul(q, k.transpose(0, 1, 3, 2)) / np.sqrt(self.head_dim)
+
+        # Compute attention probabilities
+        attention_probs = np.exp(attention_scores - np.max(attention_scores, axis=-1, keepdims=True))
+        attention_probs /= np.sum(attention_probs, axis=-1, keepdims=True)
+
+        # Compute context
+        context = np.matmul(attention_probs, v)
+
+        # Reshape and apply final linear transformation
+        context = context.transpose(0, 2, 1, 3).reshape(batch_size, seq_length, self.input_dim)
+        output = np.dot(context, self.W_o.data)
+
+        return Tensor(output)
+
+    def parameters(self) -> List[Tensor]:
+        return [self.W_q, self.W_k, self.W_v, self.W_o]
+
+
+class FeedForward:
+    """
+    Params:
+    W1 = np.random.randn(input_dim, hidden_dim) * 0.01
+    b1 = np.zeros((1, hidden_dim))
+    W2 = np.random.randn(hidden_dim, input_dim) * 0.01
+    b2 = np.zeros((1, input_dim))
+    Explanations:
+    - W1: Weight matrix for the first linear transformation
+    - b1: Bias vector for the first linear transformation
+    - W2: Weight matrix for the second linear transformation
+    - b2: Bias vector for the second linear transformation
+    """
+
+    def __init__(self, input_dim: int, hidden_dim: int):
+        self.W1 = Tensor(np.random.randn(input_dim, hidden_dim) * 0.01)
+        self.b1 = Tensor(np.zeros((1, hidden_dim)))
+        self.W2 = Tensor(np.random.randn(hidden_dim, input_dim) * 0.01)
+        self.b2 = Tensor(np.zeros((1, input_dim)))
+
+    def forward(self, x: Tensor) -> Tensor:
+        hidden = x.dot(self.W1).__add__(self.b1).apply(lambda x: np.maximum(0, x))
+        return hidden.dot(self.W2).__add__(self.b2)
+
+    def parameters(self) -> List[Tensor]:
+        return [self.W1, self.b1, self.W2, self.b2]
+
+
+class LayerNorm:
+    """
+    Params:
+    dim: int
+    gamma = np.ones((1, dim))
+    beta = np.zeros((1, dim))
+    eps = 1e-5
+    Explanations:
+    - dim: Dimensionality of the input tensor
+    - gamma: Scale parameter
+    - beta: Shift parameter
+    - eps: Epsilon value
+    """
+
+    def __init__(self, dim: int):
+        self.gamma = Tensor(np.ones((1, dim)))
+        self.beta = Tensor(np.zeros((1, dim)))
+        self.eps = 1e-5
+
+    def forward(self, x: Tensor) -> Tensor:
+        mean = np.mean(x.data, axis=-1, keepdims=True)
+        var = np.var(x.data, axis=-1, keepdims=True)
+        x_norm = (x.data - mean) / np.sqrt(var + self.eps)
+        return Tensor(x_norm * self.gamma.data + self.beta.data)
+
+    def parameters(self) -> List[Tensor]:
+        return [self.gamma, self.beta]
+
+
+class Linear:
+    """
+    Params:
+    - input_dim: Dimensionality of the input tensor
+    - output_dim: Dimensionality of the output tensor
+    Explanations:
+    - input_dim: Dimensionality of the input tensor
+    - output_dim: Dimensionality of the output tensor
+    """
+
+    def __init__(self, input_dim: int, output_dim: int):
+        self.W = Tensor(np.random.randn(input_dim, output_dim) * 0.01)
+        self.b = Tensor(np.zeros((1, output_dim)))
+
+    def forward(self, x: Tensor) -> Tensor:
+        return x.dot(self.W).__add__(self.b)
+
+    def parameters(self) -> List[Tensor]:
+        return [self.W, self.b]
+
+
 class NeuralNetwork:
-    def __init__(self):
+    def __init__(self, temperature=1.0):
         self.layers = []
         self.hooks = {
             'pre_forward': [],
@@ -2419,6 +3665,7 @@ class NeuralNetwork:
             'pre_epoch': [],
             'post_epoch': []
         }
+        self.temperature = temperature
 
     def add(self, layer):
         self.layers.append(layer)
@@ -2440,21 +3687,24 @@ class NeuralNetwork:
         for hook in self.hooks[hook_type]:
             hook(*args, **kwargs)
 
-    def forward(self, inputs: 'Tensor'):
+    def forward(self, inputs: Tensor):
         self._run_hooks('pre_forward', inputs)
         for layer in self.layers:
             inputs = layer.forward(inputs)
+        # Apply temperature scaling to the final layer output
+        inputs.data = inputs.data / self.temperature
         self._run_hooks('post_forward', inputs)
         return inputs
 
-    def backward(self, loss_gradient: 'Tensor', lr: float):
+    def backward(self, loss_gradient: Tensor, lr: float):
         self._run_hooks('pre_backward', loss_gradient, lr)
         for layer in reversed(self.layers):
             loss_gradient = layer.backward(loss_gradient, lr)
         self._run_hooks('post_backward', loss_gradient, lr)
 
-    def train(self, inputs: 'Tensor', targets: 'Tensor', epochs: int, lr: float, batch_size: int, loss_function):
+    def train(self, inputs: Tensor, targets: Tensor, epochs: int, lr: float, batch_size: int, loss_function):
         num_batches = int(np.ceil(inputs.data.shape[0] / batch_size))
+        losses = []
         for epoch in range(epochs):
             self._run_hooks('pre_epoch', epoch, epochs)
             epoch_loss = 0
@@ -2468,16 +3718,30 @@ class NeuralNetwork:
                 epoch_loss += loss
                 loss_gradient = loss_function.backward(outputs, batch_targets)
                 self.backward(loss_gradient, lr)
-            print(f"Epoch {epoch + 1}/{epochs}, Loss: {epoch_loss / num_batches}")
-            self._run_hooks('post_epoch', epoch, epochs, epoch_loss / num_batches)
+            avg_loss = epoch_loss / num_batches
+            losses.append(avg_loss)
+            self._run_hooks('post_epoch', epoch, epochs, avg_loss)
+        return losses
 
     def save(self, file_path: str):
         params = [layer.get_params() for layer in self.layers]
         with open(file_path, 'wb') as f:
-            pickle.dump(params, f)
+            pickle.dump((params, self.temperature), f)
 
     def load(self, file_path: str):
         with open(file_path, 'rb') as f:
-            params = pickle.load(f)
+            params, self.temperature = pickle.load(f)
         for layer, param in zip(self.layers, params):
             layer.set_params(param)
+
+    def set_temperature(self, temperature: float):
+        self.temperature = temperature
+
+    def plot_loss(self, losses, title="Training Loss", xlabel="Epoch", ylabel="Loss"):
+        plt.figure(figsize=(10, 6))
+        plt.plot(range(1, len(losses) + 1), losses)
+        plt.title(title)
+        plt.xlabel(xlabel)
+        plt.ylabel(ylabel)
+        plt.show()
+
