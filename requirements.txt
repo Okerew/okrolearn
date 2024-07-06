@@ -1,0 +1,7 @@
+numpy
+scipy
+statsmodels
+pandas
+matplotlib
+pillow
+cv2
