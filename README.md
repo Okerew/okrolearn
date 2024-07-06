@@ -1,23 +1,25 @@
-# Okrolearn 
-<br>
-<img src="https://github.com/Okerew/okrolearn/assets/93822247/2c3e95ea-394d-4e29-8b97-13281ee695b7" witdh = "400px", height = "400px">
-<br>
+# Okrolearn
 
-Machine Learning library created by Okerew
-<br>
-To install do `pip install okrolearn==0.2.1`
-<br>
-To use in your code with the main module do `from okrolearn import okrolearn`
-<br>
-Then for example to use Tensor, do `okrolearn.Tensor()`
-<br>
-To add it to your directory, install requirements and then just import it by having it in your project directory
-<br>
+![Okrolearn Logo](https://github.com/Okerew/okrolearn/assets/93822247/2c3e95ea-394d-4e29-8b97-13281ee695b7)
+
+Okrolearn is a machine learning library created by Okerew.
+
+## Installation
+
+To install Okrolearn, use:
+`pip install okrolearn==0.2.1`
+
+
+## Usage
+
+To use Okrolearn in your code, import the main module:
+```python
+from okrolearn import okrolearn
+okrolearn.Tensor() # Example usage
+```
+To integrate Okrolearn into your project directory, install the requirements and import it:
 `from okrolearn.src.okrolearn import *`
-<br>
-You can also just download the okrolearn.py file and import it
-<br>
+You can also download the okrolearn.py file and import it:
 `from okrolearn import *`
-<br>
-Note gpu and jit compilation are not yet supported.
-
+## Notes
+Please note that GPU and JIT compilation are not yet supported by Okrolearn.
