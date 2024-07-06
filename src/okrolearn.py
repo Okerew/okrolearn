@@ -2693,68 +2693,6 @@ class AveragePoolingLayer:
         pass
 
 
-
-class UnpoolingLayer:
-    """
-    Parameters:
-    self.inputs = the inputs
-    self.output = the output
-    self.pool_size = the pool size
-    self.stride = the stride
-    Explanation:
-    Unpooling layer, reverse of max pooling
-    """
-    def __init__(self, pool_size=2, stride=2):
-        self.pool_size = pool_size
-        self.stride = stride
-        self.max_indices = None
-
-    def forward(self, inputs):
-        batch_size, channels, height, width = inputs.data.shape
-        unpooled_height = (height - 1) * self.stride + self.pool_size
-        unpooled_width = (width - 1) * self.stride + self.pool_size
-        
-        output = np.zeros((batch_size, channels, unpooled_height, unpooled_width))
-        
-        for i in range(height):
-            for j in range(width):
-                h_start = i * self.stride
-                h_end = h_start + self.pool_size
-                w_start = j * self.stride
-                w_end = w_start + self.pool_size
-                output[:, :, h_start:h_end, w_start:w_end] = inputs.data[:, :, i:i+1, j:j+1]
-        
-        self.inputs = inputs
-        self.output = Tensor(output)
-        return self.output
-
-    def backward(self, dL_dout: Tensor, lr: float = None):
-        batch_size, channels, unpooled_height, unpooled_width = dL_dout.data.shape
-        height = (unpooled_height - self.pool_size) // self.stride + 1
-        width = (unpooled_width - self.pool_size) // self.stride + 1
-        
-        dL_dinputs = np.zeros((batch_size, channels, height, width))
-        
-        for i in range(height):
-            for j in range(width):
-                h_start = i * self.stride
-                h_end = h_start + self.pool_size
-                w_start = j * self.stride
-                w_end = w_start + self.pool_size
-                dL_dinputs[:, :, i, j] = np.sum(dL_dout.data[:, :, h_start:h_end, w_start:w_end], axis=(2, 3))
-        
-        self.inputs.grad = dL_dinputs if self.inputs.grad is None else self.inputs.grad + dL_dinputs
-        self.inputs.backward_fn = lambda grad: grad + dL_dinputs if self.inputs.backward_fn is None else lambda x: self.inputs.backward_fn(x) + dL_dinputs
-        
-        return Tensor(dL_dinputs)
-
-    def get_params(self):
-        return None
-
-    def set_params(self, params):
-        pass
-
-
 class AdamOptimizer:
     # Generate doctstring codeium
     """
@@ -3654,6 +3592,93 @@ class Linear:
         return [self.W, self.b]
 
 
+class MaxUnpoolingLayer:
+    def __init__(self, pool_size=2, stride=2):
+        self.pool_size = pool_size
+        self.stride = stride
+
+    def forward(self, inputs):
+        batch_size, channels, height, width = inputs.data.shape
+        unpooled_height = (height - 1) * self.stride + self.pool_size
+        unpooled_width = (width - 1) * self.stride + self.pool_size
+
+        output = np.zeros((batch_size, channels, unpooled_height, unpooled_width))
+
+        for i in range(height):
+            for j in range(width):
+                h_start = i * self.stride
+                w_start = j * self.stride
+                output[:, :, h_start:h_start+self.pool_size, w_start:w_start+self.pool_size] = np.expand_dims(inputs.data[:, :, i, j], axis=(2, 3))
+
+        self.inputs = inputs
+        self.output = Tensor(output)
+        return self.output
+
+
+    def backward(self, dL_dout: Tensor, lr: float = None):
+        dL_dinputs = np.zeros_like(self.inputs.data)
+
+        batch_size, channels, height, width = self.inputs.data.shape
+        for i in range(height):
+            for j in range(width):
+                h_start = i * self.stride
+                w_start = j * self.stride
+                dL_dinputs[:, :, i, j] = np.sum(dL_dout.data[:, :, h_start:h_start+self.pool_size, w_start:w_start+self.pool_size], axis=(2, 3))
+
+        self.inputs.grad = dL_dinputs if self.inputs.grad is None else self.inputs.grad + dL_dinputs
+        self.inputs.backward_fn = lambda grad: grad + dL_dinputs if self.inputs.backward_fn is None else lambda x: self.inputs.backward_fn(x) + dL_dinputs
+
+        return Tensor(dL_dinputs)
+
+    def get_params(self):
+        return None
+
+    def set_params(self, params):
+        pass
+
+class AverageUnpoolingLayer:
+    def __init__(self, pool_size=2, stride=2):
+        self.pool_size = pool_size
+        self.stride = stride
+
+    def forward(self, inputs):
+        batch_size, channels, height, width = inputs.data.shape
+        unpooled_height = (height - 1) * self.stride + self.pool_size
+        unpooled_width = (width - 1) * self.stride + self.pool_size
+
+        output = np.zeros((batch_size, channels, unpooled_height, unpooled_width))
+
+        for i in range(height):
+            for j in range(width):
+                h_start = i * self.stride
+                w_start = j * self.stride
+                output[:, :, h_start:h_start+self.pool_size, w_start:w_start+self.pool_size] = np.expand_dims(inputs.data[:, :, i, j], axis=(2, 3)) / (self.pool_size * self.pool_size)
+
+        self.inputs = inputs
+        self.output = Tensor(output)
+        return self.output
+
+    def backward(self, dL_dout: Tensor, lr: float = None):
+        dL_dinputs = np.zeros_like(self.inputs.data)
+
+        batch_size, channels, height, width = self.inputs.data.shape
+        for i in range(height):
+            for j in range(width):
+                h_start = i * self.stride
+                w_start = j * self.stride
+                dL_dinputs[:, :, i, j] = np.sum(dL_dout.data[:, :, h_start:h_start+self.pool_size, w_start:w_start+self.pool_size], axis=(2, 3)) / (self.pool_size * self.pool_size)
+
+        self.inputs.grad = dL_dinputs if self.inputs.grad is None else self.inputs.grad + dL_dinputs
+        self.inputs.backward_fn = lambda grad: grad + dL_dinputs if self.inputs.backward_fn is None else lambda x: self.inputs.backward_fn(x) + dL_dinputs
+
+        return Tensor(dL_dinputs)
+
+    def get_params(self):
+        return None
+
+    def set_params(self, params):
+        pass
+
 class NeuralNetwork:
     def __init__(self, temperature=1.0):
         self.layers = []
@@ -3744,4 +3769,3 @@ class NeuralNetwork:
         plt.xlabel(xlabel)
         plt.ylabel(ylabel)
         plt.show()
-
