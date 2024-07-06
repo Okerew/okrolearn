@@ -11,7 +11,7 @@ To use in your code with the main module do `from okrolearn import okrolearn`
 <br>
 Then for example to use Tensor, do `okrolearn.Tensor()`
 <br>
-To add it to your directory, install numpy and then just import it by having it in your project directory
+To add it to your directory, install requirements and then just import it by having it in your project directory
 <br>
 `from okrolearn.src.okrolearn import *`
 <br>
