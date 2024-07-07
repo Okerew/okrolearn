@@ -1,4 +1,4 @@
-from okrolearn.src.okrolvision import Video, ComputerVision
+from okrolearn.src.okrolearn.okrolvision import Video, ComputerVision
 video = Video.from_file('video.mp4')
 gray_video = video.to_grayscale()
 resized_video = video.resize((640, 480))
