@@ -1,4 +1,4 @@
-from okrolearn.src.okrolearn import NeuralNetwork, Tensor, Embedding, np
+from okrolearn.src.okrolearn.okrolearn import NeuralNetwork, Tensor, Embedding, np
 
 def test_embedding_layer():
     # Test initialization
