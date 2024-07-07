@@ -1,6 +1,6 @@
 import unittest
 import numpy as np
-from library import BatchNormLayer, Tensor  # replace 'your_module' with the actual module name where BatchNormLayer is defined
+from okrolearn.src.okrolearn.okrolearn import BatchNormLayer, Tensor  # replace 'your_module' with the actual module name where BatchNormLayer is defined
 
 class TestBatchNormLayer(unittest.TestCase):
     
