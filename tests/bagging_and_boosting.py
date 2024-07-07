@@ -1,4 +1,4 @@
-from okrolearn.src.okrolearn import Tensor, NeuralNetwork, np
+from okrolearn.src.okrolearn.okrolearn import Tensor, NeuralNetwork, np
 
 
 def test_decision_tree():
