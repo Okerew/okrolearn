@@ -1,5 +1,5 @@
-from okrolearn.src.okrolvision import *
-from okrolearn.src.okrolearn import np, Tensor
+from okrolearn.src.okrolearn.okrolvision import *
+from okrolearn.src.okrolearn.okrolearn import np, Tensor
 # Load and process an image
 img = Image.from_file('image.jpg')
 resized_img = img.resize((224, 224))
