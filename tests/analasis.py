@@ -1,5 +1,5 @@
-from okrolearn.src.okrolearn import Tensor, np
-from okrolearn.src.okrolanalysis import DataAnalyzer
+from okrolearn.src.okrolearn.okrolearn import Tensor, np
+from okrolearn.src.okrolearn.okrolanalysis import DataAnalyzer
 data = Tensor(np.random.randn(100, 5))
 target = np.random.rand(100)
 analyzer = DataAnalyzer(data)
