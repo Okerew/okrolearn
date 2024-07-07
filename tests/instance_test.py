@@ -1,5 +1,5 @@
 import unittest
-from okrolearn.src.okrolearn import *
+from okrolearn.src.okrolearn.okrolearn import *
 
 class TestInstanceNormLayer(unittest.TestCase):
     
