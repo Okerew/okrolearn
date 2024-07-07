@@ -1,4 +1,4 @@
-from okrolearn.src.okrolearn import *
+from okrolearn.src.okrolearn.okrolearn import *
 network = NeuralNetwork()
 network.add(DenseLayer(3, 4))
 network.add(ReLUActivationLayer())
