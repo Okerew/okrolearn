@@ -1,5 +1,5 @@
 import unittest
-from okrolearn.src.okrolearn import Tensor, ScaledDotProductAttention, np
+from okrolearn.src.okrolearn.okrolearn import Tensor, ScaledDotProductAttention, np
 
 class TestScaledDotProductAttention(unittest.TestCase):
     def setUp(self):
