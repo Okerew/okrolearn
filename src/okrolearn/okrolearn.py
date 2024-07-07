@@ -1,10 +1,9 @@
-import numpy as np
 import pickle
 from typing import Tuple, Union, Callable, Optional, List
 from scipy import sparse
 import pandas as pd
 import matplotlib.pyplot as plt
-
+import cupy as np
 
 class Tensor:
     def __init__(self, data, requires_grad=True):
@@ -1157,10 +1156,10 @@ class DenseLayer:
 
 class ELUActivationLayer:
     """
-    Paramaters:
-    self alpha = the alpha value
-    self inputs = the inputs
-    self outputs = the outputs
+    Parameters:
+    self.alpha = the alpha value
+    self.inputs = the inputs
+    self.outputs = the outputs
     """
 
     def __init__(self, alpha=1.0):
@@ -1168,21 +1167,27 @@ class ELUActivationLayer:
 
     def forward(self, inputs: Tensor):
         self.inputs = inputs
-        self.outputs = inputs.apply(lambda x: x if x > 0 else self.alpha * (np.exp(
-            x) - 1))  # If x is greater than 0, return x. If x is less than 0, return alpha * (exp(x) - 1)
+        self.outputs = inputs.apply(lambda x: x if x > 0 else self.alpha * (np.exp(x) - 1))
         return self.outputs
 
     def backward(self, dL_dout: Tensor, lr: float):
         def elu_derivative(x):
             if x > 0:
-                return 1
+                return 1.0  # Return float (double in Cupy terms)
             else:
                 return self.alpha * np.exp(x)
 
         dL_dinputs = dL_dout * self.inputs.apply(elu_derivative)
-        self.inputs.grad = dL_dinputs.data if self.inputs.grad is None else self.inputs.grad + dL_dinputs.data  # Add the dL_dinputs to the grad
-        self.inputs.backward_fn = lambda grad: grad + dL_dinputs.data if self.inputs.backward_fn is None else lambda \
-                x: self.inputs.backward_fn(x) + dL_dinputs.data  # Add the dL_dinputs to the backward function
+
+        # Accumulate gradient into inputs.grad
+        self.inputs.grad = dL_dinputs.data if self.inputs.grad is None else self.inputs.grad + dL_dinputs.data
+
+        # Update backward function if defined
+        if self.inputs.backward_fn is not None:
+            self.inputs.backward_fn = lambda grad: self.inputs.backward_fn(grad) + dL_dinputs.data
+        else:
+            self.inputs.backward_fn = lambda grad: dL_dinputs.data
+
         return dL_dinputs
 
     def get_params(self):
@@ -1223,12 +1228,12 @@ class ReLUActivationLayer:
 
 class LeakyReLUActivationLayer:
     """
-    Paramaters:
+    Parameters:
     self inputs = the inputs
     self outputs = the outputs
     self alpha = the alpha value
 
-    It is simmilar to ReLUActivationLayer
+    It is similar to ReLUActivationLayer
     """
 
     def __init__(self, alpha: float = 0.01):
@@ -1240,11 +1245,17 @@ class LeakyReLUActivationLayer:
         return self.outputs
 
     def backward(self, dL_dout: Tensor, lr: float):
-        dL_dinputs = dL_dout * self.inputs.apply(lambda x: 1 if x > 0 else self.alpha)
+        # Ensure the lambda function returns a float
+        dL_dinputs = dL_dout * self.inputs.apply(lambda x: 1.0 if x > 0 else self.alpha)
 
+        # Accumulate gradient into inputs.grad
         self.inputs.grad = dL_dinputs.data if self.inputs.grad is None else self.inputs.grad + dL_dinputs.data
-        self.inputs.backward_fn = lambda grad: grad + dL_dinputs.data if self.inputs.backward_fn is None else lambda \
-                x: self.inputs.backward_fn(x) + dL_dinputs.data
+
+        # Update backward function if defined
+        if self.inputs.backward_fn is not None:
+            self.inputs.backward_fn = lambda grad: self.inputs.backward_fn(grad) + dL_dinputs.data
+        else:
+            self.inputs.backward_fn = lambda grad: dL_dinputs.data
 
         return dL_dinputs
 
@@ -3761,11 +3772,3 @@ class NeuralNetwork:
 
     def set_temperature(self, temperature: float):
         self.temperature = temperature
-
-    def plot_loss(self, losses, title="Training Loss", xlabel="Epoch", ylabel="Loss"):
-        plt.figure(figsize=(10, 6))
-        plt.plot(range(1, len(losses) + 1), losses)
-        plt.title(title)
-        plt.xlabel(xlabel)
-        plt.ylabel(ylabel)
-        plt.show()
