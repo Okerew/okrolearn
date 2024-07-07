@@ -1,4 +1,4 @@
-from okrolearn.src.okrolearn import *
+from okrolearn.src.okrolearn.okrolearn import *
 def test_channel_shuffle():
     # Create a Tensor with known values
     data = np.array([[[1, 2], [3, 4]],
