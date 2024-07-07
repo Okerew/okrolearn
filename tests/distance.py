@@ -1,4 +1,4 @@
-from okrolearn.src.okrolearn import NeuralNetwork, Tensor, PairwiseDistance, MSELoss, np
+from okrolearn.src.okrolearn.okrolearn import NeuralNetwork, Tensor, PairwiseDistance, MSELoss, np
 
 def test_pairwise_distance():
     # Test initialization
