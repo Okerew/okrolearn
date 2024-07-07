@@ -1,6 +1,6 @@
 import numpy as np
 from typing import Tuple
-from okrolearn.src.okrolearn import *
+from okrolearn.src.okrolearn.okrolearn import *
 
 def test_conv3d_layer():
     # Initialize layer
