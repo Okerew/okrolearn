@@ -1,5 +1,4 @@
-from okrolearn.src.okrolearn import BilinearLayer, Tensor
-import numpy as np
+from okrolearn.src.okrolearn.okrolearn import BilinearLayer, Tensor, np
 # Create a BilinearLayer
 bilinear_layer = BilinearLayer(5, 5, 3)
 
