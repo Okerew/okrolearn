@@ -1,4 +1,4 @@
-from okrolearn.src.okrolearn import *
+from okrolearn.src.okrolearn.okrolearn import *
 
 # Create a simple network with a single LSTM layer
 class SimpleNetwork:
