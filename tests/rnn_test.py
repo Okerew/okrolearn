@@ -1,4 +1,4 @@
-from okrolearn.src.okrolearn import *
+from okrolearn.src.okrolearn.okrolearn import *
 
 class RNNNetwork:
     def __init__(self, input_size, hidden_size, output_size):
