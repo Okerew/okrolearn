@@ -1,4 +1,4 @@
-from okrolearn.src.okrolearn import Tensor, Fold, Unfold, np
+from okrolearn.src.okrolearn.okrolearn import Tensor, Fold, Unfold, np
 def test_fold_unfold():
     # Test parameters
     batch_size = 2
