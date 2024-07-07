@@ -1,4 +1,4 @@
-from okrolearn.src.okrolearn import Tensor
+from okrolearn.src.okrolearn.okrolearn import Tensor
 # Create a tensor
 t = Tensor([3, 1, 4, 1, 5, 9, 2, 6])
 
