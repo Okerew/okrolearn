@@ -23,4 +23,5 @@ To integrate Okrolearn into your project directory, install the requirements and
 You can also download the okrolearn.py file and import it:
 `from okrolearn import *`
 ## Notes
-Please note that GPU and JIT compilation are not yet supported by Okrolearn.
+It is slower for smaller data.
+It is not fully complete.
