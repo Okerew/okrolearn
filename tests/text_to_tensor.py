@@ -1,5 +1,5 @@
-from okrolearn.src.okrolearn import Encoder, Decoder
-from okrolearn.src.okroltext import TextToTensor, TensorToText
+from okrolearn.src.okrolearn.okrolearn import Encoder, Decoder
+from okrolearn.src.okrolearn.okroltext import TextToTensor, TensorToText
 # Example usage:
 vocabulary = ['a', 'b', 'c', ..., 'z', ' ', '<UNK>']  # Add all characters you expect in your text
 text_to_tensor = TextToTensor(vocabulary)
