@@ -1,4 +1,4 @@
-from okrolearn.src.okrolearn import Tensor, np
+from okrolearn.src.okrolearn.okrolearn import Tensor, np
 
 def test_split():
     # Create a simple tensor
