@@ -1,4 +1,4 @@
-from okrolearn.src.okrolearn import *
+from okrolearn.src.okrolearn.okrolearn import *
 
 def test_batchnorm_l1_layer():
     np.random.seed(0)  # For reproducibility
