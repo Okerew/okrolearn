@@ -1,4 +1,4 @@
-from okrolearn.src.okrolearn import *
+from okrolearn.src.okrolearn.okrolearn import *
 def test_conv1d_layer():
     # Initialize layer
     in_channels, out_channels, kernel_size = 3, 2, 3
