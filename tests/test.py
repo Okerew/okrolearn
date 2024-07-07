@@ -1,4 +1,4 @@
-from okrolearn.src.okrolearn import *
+from okrolearn.src.okrolearn.okrolearn import *
 
 
 def print_epoch_start(epoch, total_epochs):
