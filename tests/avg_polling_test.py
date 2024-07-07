@@ -1,4 +1,4 @@
-from okrolearn.src.okrolearn import Tensor, AveragePoolingLayer, np
+from okrolearn.src.okrolearn.okrolearn import Tensor, AveragePoolingLayer, np
 
 def test_average_pooling():
     # Create a sample input (e.g., a 4x4 image with a single channel)
