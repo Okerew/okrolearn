@@ -1,5 +1,5 @@
 import numpy as np
-from okrolearn.src.okrolearn import *
+from okrolearn.src.okrolearn.okrolearn import *
 
 def test_loss_functions():
     # Create some sample data
