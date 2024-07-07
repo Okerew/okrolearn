@@ -1,4 +1,4 @@
-from okrolearn.src.okrolearn import pd, Tensor
+from okrolearn.src.okrolearn.okrolearn import pd, Tensor
 # Creating a Tensor from a pandas DataFrame
 df = pd.DataFrame({'A': [1, 2, 3], 'B': [4, 5, 6]})
 tensor = Tensor.from_pandas(df)
