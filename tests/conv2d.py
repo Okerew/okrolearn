@@ -1,5 +1,5 @@
 import numpy as np
-from okrolearn.src.okrolearn import *
+from okrolearn.src.okrolearn.okrolearn import *
 
 # Assuming the Conv2DLayer and Tensor classes are defined as in your provided code
 
