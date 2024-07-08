@@ -26,4 +26,4 @@ To integrate Okrolearn into your project directory, install the requirements and
 You can also download the okrolearn.py file and import it:
 `from okrolearn import *`
 ## Notes
-Videos are not yet supported in the gpu version
+The gpu version will not work as good as cpu version for small data 
