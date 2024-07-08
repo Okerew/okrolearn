@@ -1,4 +1,4 @@
-from okrolearn.src.okrolearn import Tensor, List, np
+from okrolearn.src.okrolearn.okrolearn import Tensor, List, np
 
 
 class TextToTensor:
