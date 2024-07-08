@@ -6,8 +6,11 @@ Okrolearn is a machine learning library created by Okerew.
 
 ## Installation
 
-To install Okrolearn, use:
+To install Okrolearn for cpu, use:
 `pip install okrolearn==0.2.2`
+<br>
+To install for gpu do
+`pip install okrolearn==2.2.0`
 <br>
 #Note venv is recommended
 
@@ -23,4 +26,4 @@ To integrate Okrolearn into your project directory, install the requirements and
 You can also download the okrolearn.py file and import it:
 `from okrolearn import *`
 ## Notes
-Please note that GPU and JIT compilation are not yet supported by Okrolearn.
+Videos are not yet supported in the gpu version
