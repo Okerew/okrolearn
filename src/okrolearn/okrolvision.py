@@ -1,10 +1,13 @@
-from okrolearn.src.okrolearn import Tensor, np
+from src.okrolearn.okrolearn import Tensor, np
 import cv2
 from PIL import Image as PILImage
+import numpy as numpy
 
 
 class Image(Tensor):
     def __init__(self, data, requires_grad=True):
+        if isinstance(data, np.ndarray):
+            data = data.get()
         super().__init__(data, requires_grad)
         if len(self.data.shape) not in [2, 3]:
             raise ValueError("Image data must be 2D (grayscale) or 3D (color)")
@@ -19,21 +22,25 @@ class Image(Tensor):
     def to_grayscale(self):
         if len(self.data.shape) == 2:
             return self
-        gray = cv2.cvtColor(self.data, cv2.COLOR_BGR2GRAY)
+        data = self.data.get() if isinstance(self.data, np.ndarray) else self.data
+        gray = cv2.cvtColor(data, cv2.COLOR_BGR2GRAY)
         return Image(gray, self.requires_grad)
 
     def resize(self, size):
-        resized = cv2.resize(self.data, size)
+        data = self.data.get() if isinstance(self.data, np.ndarray) else self.data
+        resized = cv2.resize(data, size)
         return Image(resized, self.requires_grad)
 
     def rotate(self, angle):
-        rows, cols = self.data.shape[:2]
+        data = self.data.get() if isinstance(self.data, np.ndarray) else self.data
+        rows, cols = data.shape[:2]
         M = cv2.getRotationMatrix2D((cols / 2, rows / 2), angle, 1)
-        rotated = cv2.warpAffine(self.data, M, (cols, rows))
+        rotated = cv2.warpAffine(data, M, (cols, rows))
         return Image(rotated, self.requires_grad)
 
     def flip(self, flip_code):
-        flipped = cv2.flip(self.data, flip_code)
+        data = self.data.get() if isinstance(self.data, np.ndarray) else self.data
+        flipped = cv2.flip(data, flip_code)
         return Image(flipped, self.requires_grad)
 
     def to_pil_image(self):
@@ -51,17 +58,19 @@ class Image(Tensor):
 
 class Video(Tensor):
     def __init__(self, data, requires_grad=True):
-        if not isinstance(data, np.ndarray):
-            data = np.array(data)
+        if isinstance(data, np.ndarray):
+            data = data.get()
+        if not isinstance(data, numpy.ndarray):
+            data = numpy.array(data)
 
         if len(data.shape) == 3:
-            data = np.expand_dims(data, axis=-1)
+            data = numpy.expand_dims(data, axis=-1)
         elif len(data.shape) != 4:
             raise ValueError("Video data must be 3D (frames, height, width) or 4D (frames, height, width, channels)")
 
         # Ensure channel dimension is last
         if data.shape[-1] not in [1, 3, 4]:
-            data = np.moveaxis(data, 1, -1)
+            data = numpy.moveaxis(data, 1, -1)
 
         super().__init__(data, requires_grad)
 
@@ -82,26 +91,29 @@ class Video(Tensor):
         return cls(np.array(frames), requires_grad=True)
 
     def to_grayscale(self):
-        gray_frames = [cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) for frame in self.data]
-        return Video(np.array(gray_frames), self.requires_grad)
+        data = self.data.get() if isinstance(self.data, np.ndarray) else self.data
+        gray_frames = [cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) for frame in data]
+        return Video(numpy.array(gray_frames), self.requires_grad)
 
     def resize(self, size):
-        resized_frames = [cv2.resize(frame, size) for frame in self.data]
-        return Video(np.array(resized_frames), self.requires_grad)
+        data = self.data.get() if isinstance(self.data, np.ndarray) else self.data
+        resized_frames = [cv2.resize(frame, size) for frame in data]
+        return Video(numpy.array(resized_frames), self.requires_grad)
 
     def rotate(self, angle):
-        rows, cols = self.data[0].shape[:2]
+        data = self.data.get() if isinstance(self.data, np.ndarray) else self.data
+        rows, cols = data[0].shape[:2]
         M = cv2.getRotationMatrix2D((cols / 2, rows / 2), angle, 1)
-        rotated_frames = [cv2.warpAffine(frame, M, (cols, rows)) for frame in self.data]
-        return Video(np.array(rotated_frames), self.requires_grad)
+        rotated_frames = [cv2.warpAffine(frame, M, (cols, rows)) for frame in data]
+        return Video(numpy.array(rotated_frames), self.requires_grad)
 
     def save(self, filename, fps=30):
         """Save the Video tensor to a file."""
         Decoder.save_video(self, filename, fps)
 
-    def display(self):
+    def display(self, fps=30):
         """Display the Video tensor."""
-        Decoder.display_video(self)
+        Decoder.display_video(self, fps)
 
 
 class ComputerVision:
@@ -109,16 +121,16 @@ class ComputerVision:
     def detect_edges(image, low_threshold, high_threshold):
         if not isinstance(image, Image):
             raise ValueError("Input must be an Image object")
-
-        edges = cv2.Canny(image.data, low_threshold, high_threshold)
+        data = image.data.get() if isinstance(image.data, np.ndarray) else image.data
+        edges = cv2.Canny(data, low_threshold, high_threshold)
         return Image(edges)
 
     @staticmethod
     def detect_corners(image, max_corners=100, quality_level=0.01, min_distance=10):
         if not isinstance(image, Image):
             raise ValueError("Input must be an Image object")
-
         gray = image.to_grayscale().data
+        gray = gray.get() if isinstance(gray, np.ndarray) else gray
         corners = cv2.goodFeaturesToTrack(gray, max_corners, quality_level, min_distance)
         return corners
 
@@ -126,8 +138,8 @@ class ComputerVision:
     def find_contours(image):
         if not isinstance(image, Image):
             raise ValueError("Input must be an Image object")
-
         gray = image.to_grayscale().data
+        gray = gray.get() if isinstance(gray, np.ndarray) else gray
         _, binary = cv2.threshold(gray, 127, 255, cv2.THRESH_BINARY)
         contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         return contours
@@ -136,9 +148,10 @@ class ComputerVision:
     def optical_flow(prev_image, next_image):
         if not isinstance(prev_image, Image) or not isinstance(next_image, Image):
             raise ValueError("Inputs must be Image objects")
-
         prev_gray = prev_image.to_grayscale().data
         next_gray = next_image.to_grayscale().data
+        prev_gray = prev_gray.get() if isinstance(prev_gray, np.ndarray) else prev_gray
+        next_gray = next_gray.get() if isinstance(next_gray, np.ndarray) else next_gray
         flow = cv2.calcOpticalFlowFarneback(prev_gray, next_gray, None, 0.5, 3, 15, 3, 5, 1.2, 0)
         return flow
 
@@ -146,28 +159,29 @@ class ComputerVision:
     def optical_flow_video(video):
         if not isinstance(video, Video):
             raise ValueError("Input must be a Video object")
-
-        prev_frame = video.data[0]
+        data = video.data.get() if isinstance(video.data, np.ndarray) else video.data
+        prev_frame = data[0]
         prev_gray = cv2.cvtColor(prev_frame, cv2.COLOR_BGR2GRAY)
         flows = []
 
-        for frame in video.data[1:]:
+        for frame in data[1:]:
             next_gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
             flow = cv2.calcOpticalFlowFarneback(prev_gray, next_gray, None, 0.5, 3, 15, 3, 5, 1.2, 0)
             flows.append(flow)
             prev_gray = next_gray
 
-        return np.array(flows)
+        return numpy.array(flows)
 
 
 class Decoder:
     @staticmethod
     def tensor_to_image(tensor):
         """
-        Convert a tensor to a PIL Image.
+        Convert a tensor to a PIL Image, automatically reducing to 3 channels if necessary.
 
         Args:
-        tensor (Tensor): Input tensor with shape (channels, height, width) or (height, width)
+        tensor (Tensor): Input tensor with shape (channels, height, width), (height, width),
+                         or (batch_size, channels, height, width)
 
         Returns:
         PIL.Image: Decoded image
@@ -176,28 +190,54 @@ class Decoder:
             raise ValueError("Input must be a Tensor")
 
         # Ensure the tensor is on CPU and detached from the computation graph
-        data = tensor.data.cpu().detach().numpy() if hasattr(tensor.data, 'cpu') else tensor.data
+        if isinstance(tensor.data, np.ndarray):
+            data = tensor.data.get()
+        else:
+            data = tensor.data
+
+        # Handle different input shapes
+        if len(data.shape) == 4:  # (batch_size, channels, height, width)
+            if data.shape[0] != 1:
+                raise ValueError(f"Expected batch size of 1, but got {data.shape[0]}")
+            data = data.squeeze(0)
+        elif len(data.shape) not in [2, 3]:
+            raise ValueError(f"Tensor must have 2, 3, or 4 dimensions, but got {len(data.shape)}")
+
+        # If the input is 2D, expand it to 3D
+        if len(data.shape) == 2:
+            data = data[numpy.newaxis, :, :]
+
+        # Reduce to 3 channels if necessary
+        if data.shape[0] > 3:
+            data = Decoder._reduce_channels(tensor)
+        elif data.shape[0] < 3:
+            data = Decoder._expand_channels(data)
 
         # Normalize the data to the 0-255 range
-        data = np.clip(data, 0, 1)
-        data = (data * 255).astype(np.uint8)
+        data = numpy.clip(data, 0, 1)
+        data = (data * 255).astype(numpy.uint8)
 
-        # Reshape if necessary
-        if len(data.shape) == 3:
-            # (channels, height, width) -> (height, width, channels)
-            data = np.transpose(data, (1, 2, 0))
-        elif len(data.shape) != 2:
-            raise ValueError("Tensor must have 2 or 3 dimensions")
+        # (channels, height, width) -> (height, width, channels)
+        data = numpy.transpose(data, (1, 2, 0))
 
-        # Convert to PIL Image
-        if len(data.shape) == 2 or data.shape[2] == 1:
-            return PILImage.fromarray(data.squeeze(), mode='L')
-        elif data.shape[2] == 3:
-            return PILImage.fromarray(data, mode='RGB')
-        elif data.shape[2] == 4:
-            return PILImage.fromarray(data, mode='RGBA')
-        else:
-            raise ValueError("Unsupported number of channels")
+        return PILImage.fromarray(data, mode='RGB')
+
+    @staticmethod
+    def _reduce_channels(tensor):
+        """Reduce the number of channels to 3 using PCA."""
+        c, h, w = tensor.data.shape
+        reshaped = Tensor(tensor.data.reshape(c, -1).T)
+        reduced = reshaped.pca(n_components=3)
+        return reduced.data.T.reshape(3, h, w)
+
+    @staticmethod
+    def _expand_channels(data):
+        """Expand the number of channels to 3 by duplicating."""
+        c, h, w = data.shape
+        if c == 1:
+            return numpy.repeat(data, 3, axis=0)
+        elif c == 2:
+            return numpy.concatenate([data, data[0:1]], axis=0)
 
     @staticmethod
     def save_image(tensor, filename):
@@ -208,8 +248,13 @@ class Decoder:
         tensor (Tensor): Input tensor
         filename (str): Output filename
         """
-        img = Decoder.tensor_to_image(tensor)
-        img.save(filename)
+        try:
+            img = Decoder.tensor_to_image(tensor)
+            img.save(filename)
+        except Exception as e:
+            print(f"Error saving image: {e}")
+            print(f"Tensor shape: {tensor.data.shape}")
+            raise
 
     @staticmethod
     def display_image(tensor):
@@ -232,65 +277,125 @@ class Decoder:
         filename (str): Output filename
         fps (int): Frames per second
         """
-        if not isinstance(tensor, Video):
-            raise ValueError("Input must be a Video object")
+        if not isinstance(tensor, Tensor):
+            raise ValueError("Input must be a Tensor object")
 
-        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-        out = cv2.VideoWriter(filename, fourcc, fps, (tensor.data.shape[2], tensor.data.shape[1]))
+        try:
+            data = tensor.data.get() if isinstance(tensor.data, np.ndarray) else tensor.data
 
-        for frame in tensor.data:
-            out.write(frame)
+            if len(data.shape) != 4:
+                raise ValueError(f"Expected 4D tensor (frames, channels, height, width), but got shape {data.shape}")
 
-        out.release()
+            num_frames, num_channels, height, width = data.shape
+
+            # Convert to 3 channels if necessary
+            if num_channels != 3:
+                data = Decoder._convert_video_channels(data)
+
+            fourcc = cv2.VideoWriter(*'mp4v')
+            out = cv2.VideoWriter(filename, fourcc, fps, (width, height))
+
+            for frame in data:
+                # Convert frame to uint8 and correct shape (height, width, channels)
+                frame = (numpy.clip(frame, 0, 1) * 255).astype(numpy.uint8)
+                frame = numpy.transpose(frame, (1, 2, 0))
+
+                # OpenCV uses BGR format
+                frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+
+                out.write(frame)
+
+            out.release()
+        except Exception as e:
+            print(f"Error saving video: {e}")
+            print(f"Tensor shape: {tensor.data.shape}")
+            raise
 
     @staticmethod
-    def display_video(tensor):
+    def _convert_video_channels(data):
+        """Convert video data to 3 channels."""
+        num_frames, num_channels, height, width = data.shape
+        if num_channels > 3:
+            # Use PCA to reduce to 3 channels
+            reshaped = data.reshape(num_frames * height * width, num_channels)
+            tensor = Tensor(reshaped)
+            reduced = tensor.pca(n_components=3)
+            return reduced.data.reshape(num_frames, 3, height, width)
+        elif num_channels == 1:
+            # Repeat grayscale channel 3 times
+            return numpy.repeat(data, 3, axis=1)
+        elif num_channels == 2:
+            # Add a third channel (could be more sophisticated)
+            return numpy.concatenate([data, data[:, :1, :, :]], axis=1)
+        else:
+            return data
+
+    @staticmethod
+    def display_video(tensor, fps=30):
         """
         Display a video tensor.
 
         Args:
         tensor (Video): Input video tensor
+        fps (int): Frames per second
         """
-        if not isinstance(tensor, Video):
-            raise ValueError("Input must be a Video object")
+        if not isinstance(tensor, Tensor):
+            raise ValueError("Input must be a Tensor object")
 
-        for frame in tensor.data:
-            cv2.imshow('Video', frame)
-            if cv2.waitKey(30) & 0xFF == ord('q'):
-                break
+        try:
+            data = tensor.data.get() if isinstance(tensor.data, np.ndarray) else tensor.data
 
-        cv2.destroyAllWindows()
+            if len(data.shape) != 4:
+                raise ValueError(f"Expected 4D tensor (frames, channels, height, width), but got shape {data.shape}")
+
+            num_frames, num_channels, height, width = data.shape
+
+            # Convert to 3 channels if necessary
+            if num_channels != 3:
+                data = Decoder._convert_video_channels(data)
+
+            for frame in data:
+                # Convert frame to uint8 and correct shape (height, width, channels)
+                frame = (numpy.clip(frame, 0, 1) * 255).astype(numpy.uint8)
+                frame = numpy.transpose(frame, (1, 2, 0))
+
+                # OpenCV uses BGR format
+                frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+
+                cv2.imshow('Video', frame)
+                if cv2.waitKey(int(1000 / fps)) & 0xFF == ord('q'):
+                    break
+
+            cv2.destroyAllWindows()
+        except Exception as e:
+            print(f"Error displaying video: {e}")
+            print(f"Tensor shape: {tensor.data.shape}")
+            raise
 
     @staticmethod
     def batch_to_grid(tensor, nrow=8, padding=2):
-        """
-        Make a grid of images from a batch of tensors.
-
-        Args:
-        tensor (Tensor): Input tensor of shape (batch_size, channels, height, width)
-        nrow (int): Number of images displayed in each row of the grid
-        padding (int): Amount of padding between images
-
-        Returns:
-        Tensor: Grid of images
-        """
         if not isinstance(tensor, Tensor):
             raise ValueError("Input must be a Tensor")
 
         if len(tensor.data.shape) != 4:
             raise ValueError("Input tensor must be 4D (batch_size, channels, height, width)")
 
-        batch_size, channels, height, width = tensor.data.shape
+        if isinstance(tensor.data, np.ndarray):
+            data = tensor.data.get()
+        else:
+            data = tensor.data
+
+        batch_size, channels, height, width = data.shape
 
         # Compute grid size
         ncol = (batch_size + nrow - 1) // nrow
 
         # Create empty grid
-        grid = np.zeros((channels, height * nrow + padding * (nrow - 1),
-                         width * ncol + padding * (ncol - 1)))
+        grid = numpy.zeros((channels, height * nrow + padding * (nrow - 1),
+                            width * ncol + padding * (ncol - 1)))
 
         # Fill the grid
-        for idx, img in enumerate(tensor.data):
+        for idx, img in enumerate(data):
             i = idx % nrow
             j = idx // nrow
             grid[:, i * (height + padding):i * (height + padding) + height,
