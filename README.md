@@ -24,5 +24,3 @@ You can also download the okrolearn.py file and import it:
 `from okrolearn import *`
 ## Notes
 It is slower for smaller data.
-<br>
-Videos are not yet supported.
