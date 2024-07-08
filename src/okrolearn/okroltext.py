@@ -22,4 +22,16 @@ class TensorToText:
 
     def decode(self, tensor: Tensor) -> str:
         indices = tensor.data.argmax(axis=1)
-        return ''.join(self.index_to_char[i] for i in indices)
+        result = []
+        for i in indices:
+            index = int(i)
+            if index not in self.index_to_char:
+                print(f"Warning: Index {index} not found in index_to_char")
+                char = '<UNK>'
+            else:
+                char = self.index_to_char[index]
+            if not isinstance(char, str):
+                print(f"Warning: Unexpected type for char: {type(char)}")
+                char = str(char)
+            result.append(char)
+        return ''.join(result)
