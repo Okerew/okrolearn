@@ -3,5 +3,4 @@ scipy
 statsmodels
 pandas
 matplotlib
-pillow
-cv2
+opencv-python
