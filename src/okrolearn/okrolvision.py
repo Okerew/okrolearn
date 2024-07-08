@@ -1,4 +1,4 @@
-from src.okrolearn.okrolearn import Tensor, np
+from okrolearn.src.okrolearn.okrolearn import Tensor, np
 import cv2
 from PIL import Image as PILImage
 import numpy as numpy
@@ -75,17 +75,21 @@ class Video(Tensor):
         super().__init__(data, requires_grad)
 
     @classmethod
-    def from_file(cls, file_path):
+    def from_file(cls, file_path, max_frames=1000):
         cap = cv2.VideoCapture(file_path)
         if not cap.isOpened():
             raise ValueError(f"Could not open video from {file_path}")
 
         frames = []
+        frame_count = 0
         while True:
             ret, frame = cap.read()
             if not ret:
                 break
             frames.append(frame)
+            frame_count += 1
+            if frame_count >= max_frames:
+                break
         cap.release()
 
         return cls(np.array(frames), requires_grad=True)
@@ -207,12 +211,6 @@ class Decoder:
         if len(data.shape) == 2:
             data = data[numpy.newaxis, :, :]
 
-        # Reduce to 3 channels if necessary
-        if data.shape[0] > 3:
-            data = Decoder._reduce_channels(tensor)
-        elif data.shape[0] < 3:
-            data = Decoder._expand_channels(data)
-
         # Normalize the data to the 0-255 range
         data = numpy.clip(data, 0, 1)
         data = (data * 255).astype(numpy.uint8)
@@ -277,28 +275,36 @@ class Decoder:
         filename (str): Output filename
         fps (int): Frames per second
         """
-        if not isinstance(tensor, Tensor):
-            raise ValueError("Input must be a Tensor object")
+        if not isinstance(tensor, Video):
+            raise ValueError("Input must be a Video object")
 
         try:
-            data = tensor.data.get() if isinstance(tensor.data, np.ndarray) else tensor.data
+            # Ensure data is a numpy array
+            data = tensor.data
+            if isinstance(data, np.ndarray):
+                data = data.get()
+            data = numpy.array(data)  # Convert to numpy array
 
             if len(data.shape) != 4:
-                raise ValueError(f"Expected 4D tensor (frames, channels, height, width), but got shape {data.shape}")
+                raise ValueError(f"Expected 4D tensor (frames, height, width, channels), but got shape {data.shape}")
 
-            num_frames, num_channels, height, width = data.shape
+            num_frames, height, width, num_channels = data.shape
 
-            # Convert to 3 channels if necessary
+            # Ensure we have 3 channels
             if num_channels != 3:
-                data = Decoder._convert_video_channels(data)
+                if num_channels == 1:
+                    data = numpy.repeat(data, 3, axis=-1)
+                elif num_channels == 4:
+                    data = data[:, :, :, :3]
+                else:
+                    raise ValueError(f"Unsupported number of channels: {num_channels}")
 
-            fourcc = cv2.VideoWriter(*'mp4v')
+            fourcc = cv2.VideoWriter_fourcc(*'mp4v')
             out = cv2.VideoWriter(filename, fourcc, fps, (width, height))
 
             for frame in data:
-                # Convert frame to uint8 and correct shape (height, width, channels)
+                # Convert frame to uint8
                 frame = (numpy.clip(frame, 0, 1) * 255).astype(numpy.uint8)
-                frame = numpy.transpose(frame, (1, 2, 0))
 
                 # OpenCV uses BGR format
                 frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
@@ -308,7 +314,7 @@ class Decoder:
             out.release()
         except Exception as e:
             print(f"Error saving video: {e}")
-            print(f"Tensor shape: {tensor.data.shape}")
+            print(f"Tensor shape: {data.shape}")
             raise
 
     @staticmethod
@@ -339,25 +345,33 @@ class Decoder:
         tensor (Video): Input video tensor
         fps (int): Frames per second
         """
-        if not isinstance(tensor, Tensor):
-            raise ValueError("Input must be a Tensor object")
+        if not isinstance(tensor, Video):
+            raise ValueError("Input must be a Video object")
 
         try:
-            data = tensor.data.get() if isinstance(tensor.data, np.ndarray) else tensor.data
+            # Ensure data is a numpy array
+            data = tensor.data
+            if isinstance(data, np.ndarray):
+                data = data.get()
+            data = numpy.array(data)  # Convert to numpy array
 
             if len(data.shape) != 4:
-                raise ValueError(f"Expected 4D tensor (frames, channels, height, width), but got shape {data.shape}")
+                raise ValueError(f"Expected 4D tensor (frames, height, width, channels), but got shape {data.shape}")
 
-            num_frames, num_channels, height, width = data.shape
+            num_frames, height, width, num_channels = data.shape
 
-            # Convert to 3 channels if necessary
+            # Ensure we have 3 channels
             if num_channels != 3:
-                data = Decoder._convert_video_channels(data)
+                if num_channels == 1:
+                    data = numpy.repeat(data, 3, axis=-1)
+                elif num_channels == 4:
+                    data = data[:, :, :, :3]
+                else:
+                    raise ValueError(f"Unsupported number of channels: {num_channels}")
 
             for frame in data:
-                # Convert frame to uint8 and correct shape (height, width, channels)
+                # Convert frame to uint8
                 frame = (numpy.clip(frame, 0, 1) * 255).astype(numpy.uint8)
-                frame = numpy.transpose(frame, (1, 2, 0))
 
                 # OpenCV uses BGR format
                 frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
@@ -369,7 +383,7 @@ class Decoder:
             cv2.destroyAllWindows()
         except Exception as e:
             print(f"Error displaying video: {e}")
-            print(f"Tensor shape: {tensor.data.shape}")
+            print(f"Tensor shape: {data.shape}")
             raise
 
     @staticmethod
