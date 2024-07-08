@@ -1,22 +1,26 @@
-from okrolearn.src.okrolearn import Tensor, np, plt
+from src.okrolearn.okrolearn import Tensor, np, plt
 from statsmodels.tsa.stattools import acf, pacf
 from scipy import stats
+import numpy as numpy
 
 
 class DataAnalyzer:
     def __init__(self, data: Tensor):
-        self.data = data.data  # Access the underlying numpy array
+        if isinstance(data.data, np.ndarray):
+            self.data = data.data.get()
+        else:
+            self.data = data.data
 
     def describe(self):
         """
         Provide basic statistical description of the data.
         """
         return {
-            'mean': np.mean(self.data, axis=0),
-            'std': np.std(self.data, axis=0),
-            'min': np.min(self.data, axis=0),
-            'max': np.max(self.data, axis=0),
-            'median': np.median(self.data, axis=0),
+            'mean': numpy.mean(self.data, axis=0),
+            'std': numpy.std(self.data, axis=0),
+            'min': numpy.min(self.data, axis=0),
+            'max': numpy.max(self.data, axis=0),
+            'median': numpy.median(self.data, axis=0),
             'skewness': self.skewness(),
             'kurtosis': self.kurtosis(),
             'shape': self.data.shape
@@ -27,8 +31,8 @@ class DataAnalyzer:
         Compute the skewness of the data.
         """
         n = self.data.shape[0]
-        m3 = np.mean((self.data - np.mean(self.data, axis=0)) ** 3, axis=0)
-        m2 = np.mean((self.data - np.mean(self.data, axis=0)) ** 2, axis=0)
+        m3 = numpy.mean((self.data - numpy.mean(self.data, axis=0)) ** 3, axis=0)
+        m2 = numpy.mean((self.data - numpy.mean(self.data, axis=0)) ** 2, axis=0)
         return m3 / (m2 ** 1.5)
 
     def kurtosis(self):
@@ -36,15 +40,15 @@ class DataAnalyzer:
         Compute the kurtosis of the data.
         """
         n = self.data.shape[0]
-        m4 = np.mean((self.data - np.mean(self.data, axis=0)) ** 4, axis=0)
-        m2 = np.mean((self.data - np.mean(self.data, axis=0)) ** 2, axis=0)
+        m4 = numpy.mean((self.data - numpy.mean(self.data, axis=0)) ** 4, axis=0)
+        m2 = numpy.mean((self.data - numpy.mean(self.data, axis=0)) ** 2, axis=0)
         return m4 / (m2 ** 2) - 3
 
     def correlation_matrix(self):
         """
         Compute the correlation matrix of the data.
         """
-        return np.corrcoef(self.data.T)
+        return numpy.corrcoef(self.data.T)
 
     def plot_correlation_heatmap(self):
         """
@@ -62,13 +66,13 @@ class DataAnalyzer:
         Perform PCA analysis on the data.
         """
         # Center the data
-        centered_data = self.data - np.mean(self.data, axis=0)
+        centered_data = self.data - numpy.mean(self.data, axis=0)
 
         # Compute covariance matrix
-        cov_matrix = np.cov(centered_data.T)
+        cov_matrix = numpy.cov(centered_data.T)
 
         # Compute eigenvectors and eigenvalues
-        eigenvalues, eigenvectors = np.linalg.eig(cov_matrix)
+        eigenvalues, eigenvectors = numpy.linalg.eig(cov_matrix)
 
         # Sort eigenvectors by decreasing eigenvalues
         idx = eigenvalues.argsort()[::-1]
@@ -79,10 +83,10 @@ class DataAnalyzer:
         components = eigenvectors[:, :n_components]
 
         # Project data onto principal components
-        pca_result = np.dot(centered_data, components)
+        pca_result = numpy.dot(centered_data, components)
 
         # Compute explained variance ratio
-        explained_variance_ratio = eigenvalues[:n_components] / np.sum(eigenvalues)
+        explained_variance_ratio = eigenvalues[:n_components] / numpy.sum(eigenvalues)
 
         return pca_result, explained_variance_ratio
 
@@ -103,18 +107,18 @@ class DataAnalyzer:
         Perform K-means clustering on the data.
         """
         # Randomly initialize centroids
-        centroids = self.data[np.random.choice(self.data.shape[0], n_clusters, replace=False)]
+        centroids = self.data[numpy.random.choice(self.data.shape[0], n_clusters, replace=False)]
 
         for _ in range(max_iter):
             # Assign points to nearest centroid
-            distances = np.sqrt(((self.data[:, np.newaxis, :] - centroids) ** 2).sum(axis=2))
-            labels = np.argmin(distances, axis=1)
+            distances = numpy.sqrt(((self.data[:, numpy.newaxis, :] - centroids) ** 2).sum(axis=2))
+            labels = numpy.argmin(distances, axis=1)
 
             # Update centroids
-            new_centroids = np.array([self.data[labels == k].mean(axis=0) for k in range(n_clusters)])
+            new_centroids = numpy.array([self.data[labels == k].mean(axis=0) for k in range(n_clusters)])
 
             # Check for convergence
-            if np.all(centroids == new_centroids):
+            if numpy.all(centroids == new_centroids):
                 break
 
             centroids = new_centroids
@@ -171,8 +175,8 @@ class DataAnalyzer:
         """
         Detect outliers using the Z-score method.
         """
-        z_scores = (self.data - np.mean(self.data, axis=0)) / np.std(self.data, axis=0)
-        outliers = np.abs(z_scores) > threshold
+        z_scores = (self.data - numpy.mean(self.data, axis=0)) / numpy.std(self.data, axis=0)
+        outliers = numpy.abs(z_scores) > threshold
         return outliers
 
     def plot_outliers(self, threshold=3):
@@ -188,7 +192,7 @@ class DataAnalyzer:
             else:
                 ax = axes
             ax.scatter(range(len(self.data)), self.data[:, i], c='blue', alpha=0.5)
-            ax.scatter(np.where(outliers[:, i])[0], self.data[outliers[:, i], i], c='red')
+            ax.scatter(numpy.where(outliers[:, i])[0], self.data[outliers[:, i], i], c='red')
             ax.set_title(f'Feature {i + 1} Outliers')
         plt.tight_layout()
         plt.show()
@@ -197,7 +201,7 @@ class DataAnalyzer:
         """
         Calculate feature importance using correlation with target variable.
         """
-        correlations = np.abs(np.corrcoef(self.data.T, target)[:-1, -1])
+        correlations = numpy.abs(numpy.corrcoef(self.data.T, target)[:-1, -1])
         return correlations
 
     def plot_feature_importance(self, target):
@@ -236,12 +240,12 @@ class DataAnalyzer:
         Detect seasonality in a specific feature using FFT.
         """
         data = self.data[:, feature_index]
-        fft = np.fft.fft(data)
-        frequencies = np.fft.fftfreq(len(data))
+        fft = numpy.fft.fft(data)
+        frequencies = numpy.fft.fftfreq(len(data))
 
         # Plot the power spectrum
         plt.figure(figsize=(10, 6))
-        plt.plot(frequencies, np.abs(fft))
+        plt.plot(frequencies, numpy.abs(fft))
         plt.title('Power Spectrum')
         plt.xlabel('Frequency')
         plt.ylabel('Magnitude')
@@ -252,7 +256,7 @@ class DataAnalyzer:
         Perform trend analysis on a specific feature.
         """
         data = self.data[:, feature_index]
-        x = np.arange(len(data))
+        x = numpy.arange(len(data))
 
         # Linear trend
         slope, intercept, r_value, p_value, std_err = stats.linregress(x, data)
@@ -291,9 +295,9 @@ class DataAnalyzer:
         axs[0, 1].set_ylabel('Correlation')
         axs[0, 1].grid(True)
 
-        fft = np.fft.fft(data)
-        frequencies = np.fft.fftfreq(len(data))
-        axs[1, 0].plot(frequencies, np.abs(fft))
+        fft = numpy.fft.fft(data)
+        frequencies = numpy.fft.fftfreq(len(data))
+        axs[1, 0].plot(frequencies, numpy.abs(fft))
         axs[1, 0].set_title('Power Spectrum')
         axs[1, 0].set_xlabel('Frequency')
         axs[1, 0].set_ylabel('Magnitude')
@@ -301,7 +305,7 @@ class DataAnalyzer:
         axs[1, 0].grid(True)
 
         # Trend Analysis
-        x = np.arange(len(data))
+        x = numpy.arange(len(data))
         slope, intercept, r_value, p_value, std_err = stats.linregress(x, data)
         axs[1, 1].scatter(x, data, alpha=0.5, label='Data')
         axs[1, 1].plot(x, slope * x + intercept, color='red', label='Linear Trend')
