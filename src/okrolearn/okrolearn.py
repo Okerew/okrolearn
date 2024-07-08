@@ -536,7 +536,7 @@ class Tensor:
         cov_matrix = np.cov(centered_data.T)
 
         # Compute eigenvectors and eigenvalues
-        eigenvalues, eigenvectors = np.linalg.eig(cov_matrix)
+        eigenvalues, eigenvectors = np.linalg.eigh(cov_matrix)
 
         # Sort eigenvectors by decreasing eigenvalues
         idx = eigenvalues.argsort()[::-1]
