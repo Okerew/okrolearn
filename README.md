@@ -10,7 +10,7 @@ To install Okrolearn for cpu, use:
 `pip install okrolearn==0.2.2`
 <br>
 To install for gpu do
-`pip install okrolearn==2.2.1`
+`pip install okrolearn`
 <br>
 #Note venv is recommended
 
