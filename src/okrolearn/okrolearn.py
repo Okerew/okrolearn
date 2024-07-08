@@ -4,6 +4,7 @@ from scipy import sparse
 import pandas as pd
 import matplotlib.pyplot as plt
 import cupy as np
+import numpy as numpy
 
 class Tensor:
     def __init__(self, data, requires_grad=True):
@@ -1268,10 +1269,10 @@ class LeakyReLUActivationLayer:
 
 class PReLUActivationLayer:
     """
-    Paramaters:
-    self inputs = the inputs
-    self outputs = the outputs
-    self alpha = the alpha value
+    Parameters:
+    self.inputs = the inputs
+    self.outputs = the outputs
+    self.alpha = the alpha value
     """
 
     def __init__(self, alpha: float = 0.01):
@@ -1280,14 +1281,14 @@ class PReLUActivationLayer:
 
     def forward(self, inputs: Tensor):
         self.inputs = inputs
-        self.outputs = inputs.apply(lambda x: x if x > 0 else self.alpha * x)
+        self.outputs = Tensor(np.where(inputs.data > 0, inputs.data, self.alpha * inputs.data))
         return self.outputs
 
     def backward(self, dL_dout: Tensor, lr: float):
-        dL_dinputs = dL_dout * self.inputs.apply(lambda x: 1 if x > 0 else self.alpha)
+        dL_dinputs = Tensor(np.where(self.inputs.data > 0, dL_dout.data, self.alpha * dL_dout.data))
 
-        grad_alpha = dL_dout * self.inputs.apply(lambda x: x if x <= 0 else 0)
-        self.d_alpha = np.sum(grad_alpha.data)
+        grad_alpha = np.where(self.inputs.data <= 0, self.inputs.data * dL_dout.data, 0)
+        self.d_alpha = np.sum(grad_alpha)
         self.alpha -= lr * self.d_alpha
 
         if self.inputs.grad is None:
@@ -1296,13 +1297,13 @@ class PReLUActivationLayer:
             self.inputs.grad += dL_dinputs.data
 
         if self.inputs.backward_fn is None:
-            self.inputs.backward_fn = lambda grad: dL_dinputs.data  # Add the dL_dinputs to the backward function
+            self.inputs.backward_fn = lambda grad: dL_dinputs.data
         else:
             prev_backward_fn = self.inputs.backward_fn
-            self.inputs.backward_fn = lambda grad: prev_backward_fn(
-                grad) + dL_dinputs.data  # Add the dL_dinputs to the backward function
+            self.inputs.backward_fn = lambda grad: prev_backward_fn(grad) + dL_dinputs.data
 
         return dL_dinputs
+
 
     def get_params(self):
         return {'alpha': self.alpha}
@@ -3772,3 +3773,17 @@ class NeuralNetwork:
 
     def set_temperature(self, temperature: float):
         self.temperature = temperature
+
+    def plot_loss(self, losses, title="Training Loss", xlabel="Epoch", ylabel="Loss"):
+        plt.figure(figsize=(10, 6))
+
+        # Convert losses to NumPy array if it's a CuPy array
+        if isinstance(losses[0], np.ndarray):
+            losses = [loss.get() for loss in losses]
+
+        losses = numpy.array(losses)
+        plt.plot(range(1, len(losses) + 1), losses)
+        plt.title(title)
+        plt.xlabel(xlabel)
+        plt.ylabel(ylabel)
+        plt.show()
