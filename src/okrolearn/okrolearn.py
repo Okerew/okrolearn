@@ -4,7 +4,9 @@ from typing import Tuple, Union, Callable, Optional, List
 from scipy import sparse
 import pandas as pd
 import matplotlib.pyplot as plt
-
+import pstats
+import io
+import cProfile
 
 class Tensor:
     def __init__(self, data, requires_grad=True):
@@ -536,7 +538,7 @@ class Tensor:
         cov_matrix = np.cov(centered_data.T)
 
         # Compute eigenvectors and eigenvalues
-        eigenvalues, eigenvectors = np.linalg.eigh(cov_matrix)
+        eigenvalues, eigenvectors = np.linalg.eig(cov_matrix)
 
         # Sort eigenvectors by decreasing eigenvalues
         idx = eigenvalues.argsort()[::-1]
@@ -1211,6 +1213,39 @@ class ReLUActivationLayer:
         self.inputs.grad = dL_dinputs.data if self.inputs.grad is None else self.inputs.grad + dL_dinputs.data
         self.inputs.backward_fn = lambda grad: grad + dL_dinputs.data if self.inputs.backward_fn is None else lambda \
                 x: self.inputs.backward_fn(x) + dL_dinputs.data  # Add the dL_dinputs to the backward function
+
+        return dL_dinputs
+
+    def get_params(self):
+        return None
+
+    def set_params(self, params):
+        pass
+
+
+class SELUActivationLayer:
+    """
+    Parameters:
+    self.inputs = the inputs
+    self.outputs = the outputs
+    """
+
+    def __init__(self, alpha=1.6732632423543772848170429916717, scale=1.0507009873554804934193349852946):
+        self.alpha = alpha
+        self.scale = scale
+
+    def forward(self, inputs: Tensor):
+        self.inputs = inputs
+        self.outputs = inputs.apply(lambda x: self.scale * (x if x > 0 else self.alpha * (np.exp(x) - 1)))
+        return self.outputs
+
+    def backward(self, dL_dout: Tensor, lr: float):
+        dL_dinputs = dL_dout * self.inputs.apply(
+            lambda x: self.scale if x > 0 else self.scale * self.alpha * np.exp(x))
+
+        self.inputs.grad = dL_dinputs.data if self.inputs.grad is None else self.inputs.grad + dL_dinputs.data
+        self.inputs.backward_fn = lambda grad: grad + dL_dinputs.data if self.inputs.backward_fn is None else lambda \
+                x: self.inputs.backward_fn(x) + dL_dinputs.data
 
         return dL_dinputs
 
@@ -3679,6 +3714,7 @@ class AverageUnpoolingLayer:
     def set_params(self, params):
         pass
 
+
 class NeuralNetwork:
     def __init__(self, temperature=1.0):
         self.layers = []
@@ -3691,6 +3727,8 @@ class NeuralNetwork:
             'post_epoch': []
         }
         self.temperature = temperature
+        self.profiler = cProfile.Profile()
+        self.is_profiling = False
 
     def add(self, layer):
         self.layers.append(layer)
@@ -3712,7 +3750,40 @@ class NeuralNetwork:
         for hook in self.hooks[hook_type]:
             hook(*args, **kwargs)
 
+    def start_profiling(self):
+        """Start profiling."""
+        self.profiler.enable()
+        self.is_profiling = True
+
+    def stop_profiling(self):
+        """Stop profiling."""
+        self.profiler.disable()
+        self.is_profiling = False
+
+    def print_profile_stats(self, sort_by='cumulative', lines=20):
+        """Print profiling statistics."""
+        if not self.is_profiling:
+            print("Profiling was not started. Use start_profiling() first.")
+            return
+
+        s = io.StringIO()
+        ps = pstats.Stats(self.profiler, stream=s).sort_stats(sort_by)
+        ps.print_stats(lines)
+        print(s.getvalue())
+
     def forward(self, inputs: Tensor):
+        if self.is_profiling:
+            return self._profiled_forward(inputs)
+        else:
+            return self._forward(inputs)
+
+    def _profiled_forward(self, inputs: Tensor):
+        self.profiler.enable()
+        result = self._forward(inputs)
+        self.profiler.disable()
+        return result
+
+    def _forward(self, inputs: Tensor):
         self._run_hooks('pre_forward', inputs)
         for layer in self.layers:
             inputs = layer.forward(inputs)
@@ -3722,12 +3793,36 @@ class NeuralNetwork:
         return inputs
 
     def backward(self, loss_gradient: Tensor, lr: float):
+        if self.is_profiling:
+            return self._profiled_backward(loss_gradient, lr)
+        else:
+            return self._backward(loss_gradient, lr)
+
+    def _profiled_backward(self, loss_gradient: Tensor, lr: float):
+        self.profiler.enable()
+        result = self._backward(loss_gradient, lr)
+        self.profiler.disable()
+        return result
+
+    def _backward(self, loss_gradient: Tensor, lr: float):
         self._run_hooks('pre_backward', loss_gradient, lr)
         for layer in reversed(self.layers):
             loss_gradient = layer.backward(loss_gradient, lr)
         self._run_hooks('post_backward', loss_gradient, lr)
 
     def train(self, inputs: Tensor, targets: Tensor, epochs: int, lr: float, batch_size: int, loss_function):
+        if self.is_profiling:
+            return self._profiled_train(inputs, targets, epochs, lr, batch_size, loss_function)
+        else:
+            return self._train(inputs, targets, epochs, lr, batch_size, loss_function)
+
+    def _profiled_train(self, inputs: Tensor, targets: Tensor, epochs: int, lr: float, batch_size: int, loss_function):
+        self.profiler.enable()
+        result = self._train(inputs, targets, epochs, lr, batch_size, loss_function)
+        self.profiler.disable()
+        return result
+
+    def _train(self, inputs: Tensor, targets: Tensor, epochs: int, lr: float, batch_size: int, loss_function):
         num_batches = int(np.ceil(inputs.data.shape[0] / batch_size))
         losses = []
         for epoch in range(epochs):
@@ -3747,6 +3842,7 @@ class NeuralNetwork:
             losses.append(avg_loss)
             self._run_hooks('post_epoch', epoch, epochs, avg_loss)
         return losses
+
 
     def save(self, file_path: str):
         params = [layer.get_params() for layer in self.layers]
