@@ -18,13 +18,17 @@ network.add(SoftsignActivationLayer())
 network.add(HardTanhActivationLayer())
 network.remove(2)
 network.add(SoftmaxActivationLayer())
+network.add(ELUActivationLayer())
 
 inputs = Tensor(np.random.rand(100, 3))
 targets = Tensor(np.random.randint(0, 3, size=(100,)))
 loss_function = CrossEntropyLoss()
 optimizer = SGDOptimizer(lr=0.01, momentum=0.9)
 
+network.start_profiling()
 losses = network.train(inputs, targets, epochs=100, lr=0.01, batch_size=10, loss_function=loss_function)
+network.print_profile_stats()
+network.stop_profiling()
 
 # Plot the training loss
 network.plot_loss(losses)
@@ -44,6 +48,7 @@ test_network.add(SoftsignActivationLayer())
 test_network.add(HardTanhActivationLayer())
 test_network.remove(2)
 test_network.add(SoftmaxActivationLayer())
+test_network.add(ELUActivationLayer())
 
 test_network.load('model.pt')
 
