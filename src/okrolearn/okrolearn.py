@@ -1230,39 +1230,6 @@ class ReLUActivationLayer:
         pass
 
 
-class SELUActivationLayer:
-    """
-    Parameters:
-    self.inputs = the inputs
-    self.outputs = the outputs
-    """
-
-    def __init__(self, alpha=1.6732632423543772848170429916717, scale=1.0507009873554804934193349852946):
-        self.alpha = alpha
-        self.scale = scale
-
-    def forward(self, inputs: Tensor):
-        self.inputs = inputs
-        self.outputs = inputs.apply(lambda x: self.scale * (x if x > 0 else self.alpha * (np.exp(x) - 1)))
-        return self.outputs
-
-    def backward(self, dL_dout: Tensor, lr: float):
-        dL_dinputs = dL_dout * self.inputs.apply(
-            lambda x: self.scale if x > 0 else self.scale * self.alpha * np.exp(x))
-
-        self.inputs.grad = dL_dinputs.data if self.inputs.grad is None else self.inputs.grad + dL_dinputs.data
-        self.inputs.backward_fn = lambda grad: grad + dL_dinputs.data if self.inputs.backward_fn is None else lambda \
-                x: self.inputs.backward_fn(x) + dL_dinputs.data
-
-        return dL_dinputs
-
-    def get_params(self):
-        return None
-
-    def set_params(self, params):
-        pass
-
-
 class LeakyReLUActivationLayer:
     """
     Parameters:
@@ -3727,7 +3694,6 @@ class AverageUnpoolingLayer:
     def set_params(self, params):
         pass
 
-
 class NeuralNetwork:
     def __init__(self, temperature=1.0):
         self.layers = []
@@ -3740,9 +3706,9 @@ class NeuralNetwork:
             'post_epoch': []
         }
         self.temperature = temperature
+        self.custom_kernels = {}
         self.profiler = cProfile.Profile()
         self.is_profiling = False
-        self.custom_kernels = {}
 
     def add(self, layer):
         self.layers.append(layer)
@@ -3785,17 +3751,32 @@ class NeuralNetwork:
         ps.print_stats(lines)
         print(s.getvalue())
 
+    def _profiled_forward(self, inputs: Tensor):
+        self.profiler.enable()
+        result = self._forward(inputs)
+        self.profiler.disable()
+        return result
+
     def forward(self, inputs: Tensor):
         if self.is_profiling:
             return self._profiled_forward(inputs)
         else:
             return self._forward(inputs)
 
-    def _profiled_forward(self, inputs: Tensor):
-        self.profiler.enable()
-        result = self._forward(inputs)
-        self.profiler.disable()
-        return result
+    def _forward(self, inputs: Tensor):
+        self._run_hooks('pre_forward', inputs)
+        for layer in self.layers:
+            inputs = layer.forward(inputs)
+        # Apply temperature scaling to the final layer output
+        inputs.data = inputs.data / self.temperature
+        self._run_hooks('post_forward', inputs)
+        return inputs
+
+    def backward(self, loss_gradient: Tensor, lr: float):
+        self._run_hooks('pre_backward', loss_gradient, lr)
+        for layer in reversed(self.layers):
+            loss_gradient = layer.backward(loss_gradient, lr)
+        self._run_hooks('post_backward', loss_gradient, lr)
 
     def create_custom_kernel(self, kernel_name: str, kernel_code: str):
         """
@@ -3820,23 +3801,8 @@ class NeuralNetwork:
 
         self.custom_kernels[kernel_name](grid, block, args)
 
-    def _forward(self, inputs: np.ndarray):
-        self._run_hooks('pre_forward', inputs)
-        for layer in self.layers:
-            inputs = layer.forward(inputs)
-        # Apply temperature scaling to the final layer output
-        inputs = inputs / self.temperature
-        self._run_hooks('post_forward', inputs)
-        return inputs
-
-    def _backward(self, loss_gradient: np.ndarray, lr: float):
-        self._run_hooks('pre_backward', loss_gradient, lr)
-        for layer in reversed(self.layers):
-            loss_gradient = layer.backward(loss_gradient, lr)
-        self._run_hooks('post_backward', loss_gradient, lr)
-
-    def _train(self, inputs: np.ndarray, targets: np.ndarray, epochs: int, lr: float, batch_size: int, loss_function):
-        num_batches = int(np.ceil(inputs.shape[0] / batch_size))
+    def train(self, inputs: Tensor, targets: Tensor, epochs: int, lr: float, batch_size: int, loss_function):
+        num_batches = int(np.ceil(inputs.data.shape[0] / batch_size))
         losses = []
         for epoch in range(epochs):
             self._run_hooks('pre_epoch', epoch, epochs)
@@ -3844,8 +3810,8 @@ class NeuralNetwork:
             for batch in range(num_batches):
                 batch_start = batch * batch_size
                 batch_end = batch_start + batch_size
-                batch_inputs = inputs[batch_start:batch_end]
-                batch_targets = targets[batch_start:batch_end]
+                batch_inputs = Tensor(inputs.data[batch_start:batch_end])
+                batch_targets = Tensor(targets.data[batch_start:batch_end])
                 outputs = self.forward(batch_inputs)
                 loss = loss_function.forward(outputs, batch_targets)
                 epoch_loss += loss
