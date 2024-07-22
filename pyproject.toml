@@ -24,7 +24,15 @@ classifiers = [
   "Programming Language :: Python :: Implementation :: CPython",
   "Programming Language :: Python :: Implementation :: PyPy",
 ]
-dependencies = []
+dependencies = [
+  "numpy",
+  "statsmodels",
+  "pandas",
+  "matplotlib",
+  "scipy",
+  "pillow",
+  "opencv-python"
+]
 
 [project.urls]
 Documentation = "https://github.com/Okerew/okrolearn#readme"
@@ -34,17 +42,6 @@ Source = "https://github.com/Okerew/okrolearn"
 [tool.hatch.version]
 path = "src/okrolearn/__about__.py"
 
-[tool.hatch.envs.types]
-extra-dependencies = [
-  "mypy>=1.0.0",
-  "numpy",
-  "statsmodels",
-  "pandas",
-  "matplotlib",
-  "scipy",
-  "pillow",
-  "cv2"
-]
 [tool.hatch.envs.types.scripts]
 check = "mypy --install-types --non-interactive {args:src/okrolearn tests}"
 
