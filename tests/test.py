@@ -6,6 +6,7 @@ def print_epoch_start(epoch, total_epochs):
 
 
 network = NeuralNetwork(temperature=0.5)
+network.start_profiling()
 network.add(DenseLayer(3, 4))
 network.add_hook('pre_epoch', print_epoch_start)
 network.add(ReLUActivationLayer())
@@ -19,6 +20,8 @@ network.add(HardTanhActivationLayer())
 network.remove(2)
 network.add(SoftmaxActivationLayer())
 network.add(ELUActivationLayer())
+network.print_profile_stats()
+network.stop_profiling()
 
 inputs = Tensor(np.random.rand(100, 3))
 targets = Tensor(np.random.randint(0, 3, size=(100,)))
