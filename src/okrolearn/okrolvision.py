@@ -1,4 +1,4 @@
-from okrolearn.src.okrolearn.okrolearn import Tensor, np
+from okrolearn.okrolearn import Tensor, np
 import cv2
 from PIL import Image as PILImage
 
