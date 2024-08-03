@@ -7,7 +7,7 @@ Okrolearn is a machine learning library created by Okerew.
 ## Installation
 
 To install Okrolearn for cpu, use:
-`pip install okrolearn==0.2.4`
+`pip install okrolearn==0.2.5`
 <br>
 To install for gpu do
 `pip install okrolearn`
