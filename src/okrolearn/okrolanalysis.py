@@ -1,4 +1,4 @@
-from okrolearn.src.okrolearn import Tensor, np, plt
+from okrolearn.okrolearn import Tensor, np, plt
 from statsmodels.tsa.stattools import acf, pacf
 from scipy import stats
 
