@@ -31,7 +31,8 @@ dependencies = [
   "matplotlib",
   "scipy",
   "pillow",
-  "opencv-python"
+  "opencv-python",
+  "psutil"
 ]
 
 [project.urls]
