@@ -7,10 +7,12 @@ from typing import Tuple, Union, Callable, Optional, List
 import matplotlib.pyplot as plt
 import cupy as np
 import numpy as numpy
-from src.okrolearn.tensor import Tensor
+from okrolearn.tensor import Tensor
 import pdb
 import logging
 from flask import jsonify, request, Flask
+import random
+import psutil
 
 class DenseLayer:
     def __init__(self, input_size, output_size):
@@ -84,6 +86,48 @@ class ELUActivationLayer:
             self.inputs.backward_fn = lambda grad: self.inputs.backward_fn(grad) + dL_dinputs.data
         else:
             self.inputs.backward_fn = lambda grad: dL_dinputs.data
+
+        return dL_dinputs
+
+    def get_params(self):
+        return None
+
+    def set_params(self, params):
+        pass
+
+
+class SwishActivationLayer:
+    """
+    Parameters:
+    self.inputs = the inputs
+    self.outputs = the outputs
+    """
+
+    def sigmoid(self, x):
+        # Clip values to avoid overflow
+        return 1 / (1 + np.exp(-np.clip(x, -88, 88)))
+
+    def forward(self, inputs: Tensor):
+        self.inputs = inputs
+        self.sigmoid_values = inputs.apply(self.sigmoid)
+        self.outputs = inputs * self.sigmoid_values
+        return self.outputs
+
+    def backward(self, dL_dout: Tensor, lr: float):
+        swish = self.outputs.data
+        sigmoid = self.sigmoid_values.data
+
+        # Compute dswish/dx with overflow protection
+        dswish_dx = swish + sigmoid * (1 - swish)
+
+        # Clip the result to avoid extreme values
+        dswish_dx = np.clip(dswish_dx, -1e9, 1e9)
+
+        dL_dinputs = Tensor(dL_dout.data * dswish_dx)
+
+        self.inputs.grad = dL_dinputs.data if self.inputs.grad is None else self.inputs.grad + dL_dinputs.data
+        self.inputs.backward_fn = lambda grad: grad + dL_dinputs.data if self.inputs.backward_fn is None else lambda \
+                x: self.inputs.backward_fn(x) + dL_dinputs.data
 
         return dL_dinputs
 
@@ -209,6 +253,63 @@ class PReLUActivationLayer:
             self.alpha = params['alpha']
 
 
+class GELUActivationLayer:
+    """
+    GELU (Gaussian Error Linear Unit) Activation Layer.
+
+    Parameters:
+    self.inputs: The inputs to the layer.
+    self.outputs: The outputs from the layer.
+    """
+
+    def __init__(self):
+        self.sqrt_2_over_pi = np.sqrt(2 / np.pi)  # Precompute constant
+        self.tanh_clip_value = 15  # Clipping value for tanh argument to prevent overflow
+
+    def forward(self, inputs):
+        self.inputs = inputs
+        x = inputs.data
+
+        # GELU activation function: 0.5 * x * (1 + tanh(sqrt(2/pi) * (x + 0.044715 * x^3)))
+        x_cubed = np.power(x, 3)
+        tanh_arg = self.sqrt_2_over_pi * (x + 0.044715 * x_cubed)
+
+        # Clip the tanh argument to avoid overflow issues
+        tanh_arg = np.clip(tanh_arg, -self.tanh_clip_value, self.tanh_clip_value)
+
+        self.outputs = Tensor(0.5 * x * (1 + np.tanh(tanh_arg)), requires_grad=inputs.requires_grad)
+        return self.outputs
+
+    def backward(self, dL_dout, lr):
+        x = self.inputs.data
+        dL_dout = dL_dout.data
+
+        # GELU derivative
+        x_cubed = np.power(x, 3)
+        tanh_arg = self.sqrt_2_over_pi * (x + 0.044715 * x_cubed)
+
+        # Clip the tanh argument to avoid overflow issues
+        tanh_arg = np.clip(tanh_arg, -self.tanh_clip_value, self.tanh_clip_value)
+        tanh_part = np.tanh(tanh_arg)
+
+        sech2_tanh = 1 - tanh_part ** 2
+        gelu_derivative = 0.5 * tanh_part + 0.5 * x * sech2_tanh * self.sqrt_2_over_pi * (
+                    1 + 3 * 0.044715 * np.power(x, 2))
+
+        dL_dinputs = dL_dout * gelu_derivative
+
+        if self.inputs.requires_grad:
+            self.inputs.grad = dL_dinputs
+
+        return Tensor(dL_dinputs)
+
+    def get_params(self):
+        return None
+
+    def set_params(self, params):
+        pass
+
+
 class SoftsignActivationLayer:
     def forward(self, inputs: Tensor):
         self.inputs = inputs
@@ -231,23 +332,28 @@ class SoftsignActivationLayer:
 
 class SoftmaxActivationLayer:
     """
-    Paramaters:
-    self inputs = the inputs
-    self outputs = the outputs
+    Softmax activation layer for neural networks.
+
+    Parameters:
+    self.inputs: Tensor - the inputs
+    self.outputs: Tensor - the outputs after applying softmax
     """
 
     def forward(self, inputs: Tensor):
-        exp_values = np.exp(inputs.data - np.max(inputs.data, axis=1, keepdims=True))
-        probabilities = exp_values / np.sum(exp_values, axis=1,
-                                            keepdims=True)  # probabilities is equal to exp_values / sum(exp_values, axis=1, keepdims=True)
+        # Subtract max value for numerical stability
+        shifted_inputs = inputs.data - np.max(inputs.data, axis=1, keepdims=True)
+        exp_values = np.exp(shifted_inputs)
+        probabilities = exp_values / np.sum(exp_values, axis=1, keepdims=True)
+
+        # Ensure no NaNs or Infs in outputs
+        probabilities = np.nan_to_num(probabilities, nan=0.0, posinf=1.0, neginf=0.0)
+
         self.outputs = Tensor(probabilities)
         return self.outputs
 
     def backward(self, dL_dout: Tensor, lr: float = None):
         jacobians = self._compute_jacobians()
-
-        gradients = np.einsum('ijk,ik->ij', jacobians, dL_dout.data)  # gradients is equal to jacobians * dL_dout
-
+        gradients = np.einsum('ijk,ik->ij', jacobians, dL_dout.data)
         return Tensor(gradients)
 
     def _compute_jacobians(self):
@@ -258,13 +364,134 @@ class SoftmaxActivationLayer:
             for j in range(num_classes):
                 for k in range(num_classes):
                     if j == k:
-                        jacobians[i, j, k] = self.outputs.data[i, j] * (
-                                1 - self.outputs.data[i, k])  # jacobian is equal to outputs * (1 - outputs)
+                        jacobians[i, j, k] = self.outputs.data[i, j] * (1 - self.outputs.data[i, k])
                     else:
-                        jacobians[i, j, k] = -self.outputs.data[i, j] * self.outputs.data[
-                            i, k]  # jacobian is equal to -outputs * outputs
+                        jacobians[i, j, k] = -self.outputs.data[i, j] * self.outputs.data[i, k]
 
         return jacobians
+
+    def get_params(self):
+        return None
+
+    def set_params(self, params: dict):
+        pass
+
+
+class SoftminActivationLayer:
+    """
+    Softmin activation layer for neural networks.
+
+    Parameters:
+    self.inputs: Tensor - the inputs
+    self.outputs: Tensor - the outputs after applying softmin
+    """
+
+    def forward(self, inputs: Tensor):
+        # Add max value for numerical stability (opposite of softmax)
+        shifted_inputs = inputs.data + np.max(inputs.data, axis=1, keepdims=True)
+        inv_exp_values = np.exp(-shifted_inputs)
+        probabilities = inv_exp_values / np.sum(inv_exp_values, axis=1, keepdims=True)
+
+        # Ensure no NaNs or Infs in outputs
+        probabilities = np.nan_to_num(probabilities, nan=0.0, posinf=1.0, neginf=0.0)
+
+        self.outputs = Tensor(probabilities)
+        return self.outputs
+
+    def backward(self, dL_dout: Tensor, lr: float = None):
+        jacobians = self._compute_jacobians()
+        gradients = np.einsum('ijk,ik->ij', jacobians, dL_dout.data)
+        return Tensor(gradients)
+
+    def _compute_jacobians(self):
+        batch_size, num_classes = self.outputs.data.shape
+        jacobians = np.zeros((batch_size, num_classes, num_classes))
+
+        for i in range(batch_size):
+            for j in range(num_classes):
+                for k in range(num_classes):
+                    if j == k:
+                        jacobians[i, j, k] = self.outputs.data[i, j] * (1 - self.outputs.data[i, k])
+                    else:
+                        jacobians[i, j, k] = -self.outputs.data[i, j] * self.outputs.data[i, k]
+
+        return jacobians
+
+    def get_params(self):
+        return None
+
+    def set_params(self, params: dict):
+        pass
+
+
+class LogSoftmaxActivationLayer:
+    """
+    Parameters:
+    self.inputs = the inputs
+    self.outputs = the outputs
+    """
+
+    def forward(self, inputs: Tensor):
+        # Convert data to float64 to avoid large integers
+        inputs.data = inputs.data.astype(np.float64)
+
+        # Subtract max for numerical stability
+        max_vals = np.max(inputs.data, axis=1, keepdims=True)
+
+        # Compute exp values and ensure they are numerically stable
+        exp_values = np.exp(np.clip(inputs.data - max_vals, -500, 500))
+
+        # Sum exp values
+        sum_exp_values = np.sum(exp_values, axis=1, keepdims=True)
+
+        # Compute log softmax
+        log_softmax = (inputs.data - max_vals) - np.log(sum_exp_values)
+        self.outputs = Tensor(log_softmax)
+        return self.outputs
+
+    def backward(self, dL_dout: Tensor, lr: float = None):
+        jacobians = self._compute_jacobians()
+        gradients = np.einsum('ijk,ik->ij', jacobians, dL_dout.data)
+        return Tensor(gradients)
+
+    def _compute_jacobians(self):
+        batch_size, num_classes = self.outputs.data.shape
+        jacobians = np.zeros((batch_size, num_classes, num_classes), dtype=np.float64)
+
+        for i in range(batch_size):
+            for j in range(num_classes):
+                for k in range(num_classes):
+                    if j == k:
+                        jacobians[i, j, k] = 1 - np.exp(self.outputs.data[i, j])
+                    else:
+                        jacobians[i, j, k] = -np.exp(self.outputs.data[i, k])
+
+        return jacobians
+
+    def get_params(self):
+        return None
+
+    def set_params(self, params: dict):
+        pass
+
+
+class SigmoidActivationLayer:
+    """
+    Parameters:
+    self.inputs = the inputs
+    self.outputs = the outputs
+    """
+
+    def forward(self, inputs: Tensor):
+        self.inputs = inputs
+        sigmoid_values = 1 / (1 + np.exp(-inputs.data))
+        self.outputs = Tensor(sigmoid_values)
+        return self.outputs
+
+    def backward(self, dL_dout: Tensor, lr: float = None):
+        sigmoid_derivative = self.outputs.data * (1 - self.outputs.data)
+        gradients = dL_dout.data * sigmoid_derivative
+        return Tensor(gradients)
 
     def get_params(self):
         return None
@@ -1154,31 +1381,6 @@ class CrossEntropyLoss:
 
         return dL_doutputs
 
-
-class SGDOptimizer:
-    """
-    Parameters:
-    -----------
-    self lr: learning rate
-    self momentum: momentum
-    self velocity: velocity
-    """
-
-    def __init__(self, lr=0.01, momentum=0.9):
-        self.lr = lr
-        self.momentum = momentum
-        self.velocity = {}
-
-    def update(self, layer, grad, key):
-        if key not in self.velocity:
-            self.velocity[key] = np.zeros_like(grad)
-        self.velocity[key] = self.momentum * self.velocity[key] - self.lr * grad
-        layer += self.velocity[key]
-
-        layer.grad = np.zeros_like(grad)
-        layer.backward_fn = None
-
-
 class LSTMLayer:
     """
     Parameters:
@@ -1601,128 +1803,6 @@ class AveragePoolingLayer:
         pass
 
 
-class AdamOptimizer:
-    # Generate doctstring codeium
-    """
-    Parameters
-    ----------
-    lr : float
-        Learning rate
-    beta1 : float
-        Exponential decay rate for the first moment estimates
-    beta2 : float
-        Exponential decay rate for the second moment estimates
-    epsilon : float
-        Constant for numerical stability
-    """
-
-    def __init__(self, lr=0.001, beta1=0.9, beta2=0.999, epsilon=1e-8):
-        self.lr = lr
-        self.beta1 = beta1
-        self.beta2 = beta2
-        self.epsilon = epsilon
-        self.m = {}
-        self.v = {}
-        self.t = 0
-
-    def update(self, layer, grad, key):
-        self.t += 1
-
-        if key not in self.m:
-            self.m[key] = np.zeros_like(grad)
-            self.v[key] = np.zeros_like(grad)
-
-        self.m[key] = self.beta1 * self.m[key] + (1 - self.beta1) * grad
-        self.v[key] = self.beta2 * self.v[key] + (1 - self.beta2) * (grad ** 2)
-
-        m_hat = self.m[key] / (1 - self.beta1 ** self.t)
-        v_hat = self.v[key] / (1 - self.beta2 ** self.t)
-
-        update = self.lr * m_hat / (np.sqrt(v_hat) + self.epsilon)
-        layer -= update
-
-    def reset(self):
-        self.m = {}
-        self.v = {}
-        self.t = 0
-
-
-class NadamOptimizer:
-    # Simmilar to Adam Optimizer
-    def __init__(self, lr=0.002, beta1=0.9, beta2=0.999, epsilon=1e-8):
-        self.lr = lr
-        self.beta1 = beta1
-        self.beta2 = beta2
-        self.epsilon = epsilon
-        self.m = {}
-        self.v = {}
-        self.t = 0
-
-    def update(self, layer, grad, key):
-        self.t += 1
-
-        if key not in self.m:
-            self.m[key] = np.zeros_like(grad)
-            self.v[key] = np.zeros_like(grad)
-
-        beta1_t = self.beta1 * (1 - self.beta1 ** (self.t - 1)) / (1 - self.beta1 ** self.t)
-        beta2_t = self.beta2 * (1 - self.beta2 ** (self.t - 1)) / (1 -
-                                                                   self.beta2 ** self.t)
-
-        self.m[key] = self.beta1 * self.m[key] + (1 - self.beta1) * grad
-        self.v[key] = self.beta2 * self.v[key] + (1 - self.beta2) * (grad ** 2)
-
-        m_hat = self.m[key] / (1 - self.beta1 ** self.t)
-        v_hat = self.v[key] / (1 - self.beta2 ** self.t)
-
-        m_nesterov = beta1_t * m_hat + (1 - beta1_t) * grad
-
-        update = self.lr * m_nesterov / (np.sqrt(v_hat) + self.epsilon)
-
-        layer -= update
-
-    def reset(self):
-        self.m = {}
-        self.v = {}
-        self.t = 0
-
-
-class AdadeltaOptimizer:
-    """
-    Parameters
-    ----------
-    rho : float
-        Decay rate for the first moment estimates
-    epsilon : float
-        Constant for numerical stability
-    """
-
-    def __init__(self, rho=0.95, epsilon=1e-8):
-        self.rho = rho
-        self.epsilon = epsilon
-        self.E_g2 = {}
-        self.E_dx2 = {}
-
-    def update(self, layer, grad, key):
-        if key not in self.E_g2:
-            self.E_g2[key] = np.zeros_like(grad)
-            self.E_dx2[key] = np.zeros_like(grad)
-
-        self.E_g2[key] = self.rho * self.E_g2[key] + (1 - self.rho) * (grad ** 2)
-
-        RMS_g = np.sqrt(self.E_g2[key] + self.epsilon)
-        RMS_dx = np.sqrt(self.E_dx2[key] + self.epsilon)
-        update = (RMS_dx / RMS_g) * grad
-
-        self.E_dx2[key] = self.rho * self.E_dx2[key] + (1 - self.rho) * (update ** 2)
-
-        layer -= update
-
-    def reset(self):
-        self.E_g2 = {}
-        self.E_dx2 = {}
-
-
 class MSELoss:
     # Basic loss function
     def forward(self, outputs, targets):
@@ -1749,6 +1829,15 @@ class MeanSquaredLogarithmicError:
         grad = 2 * (np.log(outputs.data + 1 + epsilon) - np.log(targets.data + 1 + epsilon)) / (
                 outputs.data + 1 + epsilon)
         return Tensor(grad / targets.data.size)
+
+
+class MeanAbsoluteError:
+    def forward(self, outputs: Tensor, targets: Tensor):
+        return np.mean(np.abs(targets.data - outputs.data))
+
+    def backward(self, outputs: Tensor, targets: Tensor):
+        grad = np.sign(outputs.data - targets.data)
+        return Tensor(grad / outputs.data.size)
 
 
 class MeanAbsolutePercentageError:
@@ -2643,6 +2732,7 @@ class NeuralNetwork:
         self.parameter_history = []
         self.logger = self._setup_logger()
         self.breakpoints = {}
+        self.error_history = []
 
     def add(self, layer):
         self.layers.append(layer)
@@ -2764,45 +2854,101 @@ class NeuralNetwork:
 
         self.custom_kernels[kernel_name](grid, block, args)
 
-    def train(self, inputs: 'Tensor', targets: 'Tensor', epochs: int, lr: float, batch_size: int, loss_function):
+    def train(self, inputs: 'Tensor', targets: 'Tensor', epochs: int, lr: float, optimizer, batch_size: int, loss_function):
         self._check_breakpoint('train', inputs, targets, epochs, lr, batch_size, loss_function)
         if self.is_profiling:
-            return self._profiled_train(inputs, targets, epochs, lr, batch_size, loss_function)
+            return self._profiled_train(inputs, targets, epochs, lr, optimizer, batch_size, loss_function)
         else:
-            return self._train(inputs, targets, epochs, lr, batch_size, loss_function)
+            return self._train(inputs, targets, epochs, lr, optimizer, batch_size, loss_function)
 
-    def _profiled_train(self, inputs: 'Tensor', targets: 'Tensor', epochs: int, lr: float, batch_size: int,
+    def _profiled_train(self, inputs: 'Tensor', targets: 'Tensor', epochs: int, lr: float, optimizer, batch_size: int,
                         loss_function):
         self.profiler.enable()
-        result = self._train(inputs, targets, epochs, lr, batch_size, loss_function)
+        result = self._train(inputs, targets, epochs, lr, optimizer, batch_size, loss_function)
         self.profiler.disable()
         return result
 
-    def _train(self, inputs: 'Tensor', targets: 'Tensor', epochs: int, lr: float, batch_size: int, loss_function):
-        num_batches = int(np.ceil(inputs.data.shape[0] / batch_size))
+    def _train(self, inputs: 'Tensor', targets: 'Tensor', epochs: int, lr, optimizer, batch_size: int,
+               loss_function, clip_grad=None):
+        num_samples = inputs.data.shape[0]
+        num_batches = int(np.ceil(num_samples / batch_size))
         losses = []
+
         for epoch in range(epochs):
             self._run_hooks('pre_epoch', epoch, epochs)
-            epoch_loss = 0.0  # Initialize as float
+            epoch_loss = 0.0
             epoch_start_time = time.time()
+
+            # Shuffle the data at the beginning of each epoch
+            indices = np.arange(num_samples)
+            np.random.shuffle(indices)
+            inputs.data = inputs.data[indices]
+            targets.data = targets.data[indices]
+
             for batch in range(num_batches):
                 batch_start = batch * batch_size
-                batch_end = batch_start + batch_size
+                batch_end = min(batch_start + batch_size, num_samples)
                 batch_inputs = Tensor(inputs.data[batch_start:batch_end])
                 batch_targets = Tensor(targets.data[batch_start:batch_end])
+
+                # Forward pass
                 outputs = self.forward(batch_inputs)
+
+                # Compute loss
                 loss = loss_function.forward(outputs, batch_targets)
                 epoch_loss += float(
                     np.ndarray(loss.shape, dtype=loss.dtype, memptr=loss.data)[()])  # Extract scalar value
+
+                # Backward pass
                 loss_gradient = loss_function.backward(outputs, batch_targets)
                 self.backward(loss_gradient, lr)
+
+                # Gradient clipping (if specified)
+                if clip_grad is not None:
+                    self._clip_gradients(clip_grad)
+
+                # Update parameters using the optimizer
+                for i, layer in enumerate(self.layers):
+                    if hasattr(layer, 'parameters'):
+                        for key, param in layer.parameters.items():
+                            grad = layer.gradients[key]
+                            optimizer.update(param, grad, f"layer_{i}_{key}")
+
+
             avg_loss = epoch_loss / num_batches
             losses.append(avg_loss)
+
+            self.parameter_history.append(self.get_parameter_history())
+
             epoch_end_time = time.time()
+
             self.logger.info(
                 f"Epoch {epoch + 1}/{epochs} - Loss: {avg_loss:.4f} - Time: {epoch_end_time - epoch_start_time:.2f}s")
             self._run_hooks('post_epoch', epoch, epochs, avg_loss)
+
         return losses
+
+    def parameters(self):
+        return []
+
+    def get_parameter_history(self):
+        return [param.data.copy() for param in self.parameters()]
+
+
+    def _clip_gradients(self, max_norm):
+        """Clip the gradients to a maximum norm."""
+        total_norm = 0.0
+        for param in self.parameters():
+            if param.grad is not None:
+                param_norm = np.linalg.norm(param.grad.data)
+                total_norm += param_norm ** 2
+        total_norm = np.sqrt(total_norm)
+
+        if total_norm > max_norm:
+            clip_coef = max_norm / (total_norm + 1e-6)
+            for param in self.parameters():
+                if param.grad is not None:
+                    param.grad.data *= clip_coef
 
     def save(self, file_path: str):
         params = [layer.get_params() for layer in self.layers]
@@ -2870,6 +3016,10 @@ class NeuralNetwork:
             return
 
         num_layers = len(self.parameter_history[0])
+        if num_layers == 0:
+            self.logger.warning("No layers to plot. Ensure your model has parameters.")
+            return
+
         fig, axes = plt.subplots(num_layers, 1, figsize=(10, 5 * num_layers))
 
         # Ensure axes is always a list, even if there's only one subplot
@@ -2877,7 +3027,7 @@ class NeuralNetwork:
             axes = [axes]
 
         for i in range(num_layers):
-            layer_params = [params[i] for params in self.parameter_history]
+            layer_params = [params[i] for params in self.parameter_history if i < len(params)]
 
             def extract_numerics(obj):
                 if isinstance(obj, (int, float, numpy.number)):
@@ -2966,8 +3116,9 @@ class NeuralNetwork:
             epochs = int(data['epochs'])
             lr = float(data['lr'])
             batch_size = int(data['batch_size'])
+            optimizer = data.get('optimizer', 'SGDOptimizer')
 
-            losses = self.train(inputs, targets, epochs, lr, batch_size, loss_function=self.loss_function)
+            losses = self.train(inputs, targets, epochs, lr, optimizer, batch_size, loss_function=self.loss_function)
             return jsonify({'losses': losses})
 
         @self.app.route('/save_model', methods=['POST'])
@@ -2995,3 +3146,284 @@ class NeuralNetwork:
                 'temperature': self.temperature,
                 'debug_mode': self.debug_mode
             })
+
+    def _is_safe_size(self, size):
+        # Check if the size is safe and won't cause overflow or NaN
+        return size <= 512
+
+    def suggest_architecture(self, input_size, output_size, task_type='classification', data_type='tabular', depth=3,
+                             temperature=1.0):
+        self._check_breakpoint('suggest_architecture', input_size, output_size, task_type, data_type, depth,
+                               temperature)
+
+        suggested_architecture = []
+        current_size = min(input_size, 1024)  # Cap initial size
+
+        # Define layer groups and activation layers
+        layer_groups = {
+            'image': [Conv2DLayer, AveragePoolingLayer],
+            'sequence': [LSTMLayer, GRULayer, RNNLayer, ScaledDotProductAttention],
+            'tabular': [DenseLayer]
+        }
+        activation_layers = [ELUActivationLayer, SoftsignActivationLayer, HardTanhActivationLayer, SELUActivationLayer,
+                             LinearActivationLayer, PReLUActivationLayer, TanhActivationLayer, SwishActivationLayer,
+                             GELUActivationLayer]
+        regularization_layers = [L1RegularizationLayer, L2RegularizationLayer, L3RegularizationLayer]
+        conv_layers = [Conv1DLayer, Conv2DLayer, Conv3DLayer]
+        attention_layers = [ScaledDotProductAttention, MultiHeadAttention]
+        padding_layers = [ZeroPaddingLayer, ReflectionPaddingLayer, PaddingLayer]
+        fold_unfold_layers = [Fold, Unfold]
+
+        main_layers = layer_groups.get(data_type, layer_groups['tabular'])
+
+        # Input layer
+        if data_type == 'image':
+            suggested_architecture.append(
+                f"network.add(Conv2DLayer(in_channels=3, out_channels=32, kernel_size=3, stride=1, padding=1))")
+            current_size = 32
+        elif data_type == 'sequence':
+            hidden_size = min(max(32, current_size), 512)
+            suggested_architecture.append(
+                f"network.add(LSTMLayer(input_size={current_size}, hidden_size={hidden_size}))")
+            current_size = hidden_size
+        else:
+            hidden_size = min(max(32, current_size), 512)
+            suggested_architecture.append(f"network.add(DenseLayer({current_size}, {hidden_size}))")
+            current_size = hidden_size
+
+        # Hidden layers
+        for i in range(depth - 1):
+            try:
+                layer = random.choice(main_layers)
+                if layer in conv_layers:
+                    if data_type == 'tabular':
+                        continue  # Skip conv layers for tabular data
+                    next_size = min(current_size * 2, 512)
+                    if not self._is_safe_size(next_size):
+                        continue  # Skip if the next size is not safe
+                    suggested_architecture.append(
+                        f"network.add({layer.__name__}(in_channels={current_size}, out_channels={next_size}, kernel_size=3, stride=1, padding=1))")
+                    if i % 2 == 1:
+                        pool_layer = random.choice([MaxPoolingLayer, AveragePoolingLayer])
+                        suggested_architecture.append(f"network.add({pool_layer.__name__}(pool_size=2, stride=2))")
+                elif layer in (LSTMLayer, GRULayer, RNNLayer):
+                    next_size = min(current_size * 2, 512)
+                    if not self._is_safe_size(next_size):
+                        continue  # Skip if the next size is not safe
+                    suggested_architecture.append(
+                        f"network.add({layer.__name__}(input_size={current_size}, hidden_size={next_size}))")
+                elif layer in padding_layers:
+                    padding_size = (1, 1) if isinstance(layer, ReflectionPaddingLayer) else 1
+                    suggested_architecture.append(f"network.add({layer.__name__}(padding={padding_size}))")
+                    next_size = current_size
+                elif layer in attention_layers:
+                    suggested_architecture.append(f"network.add({layer.__name__}(d_model={current_size}))")
+                    next_size = current_size
+                elif layer in fold_unfold_layers:
+                    suggested_architecture.append(f"network.add({layer.__name__}(kernel_size=3, stride=1, padding=1))")
+                    next_size = current_size
+                elif layer == PairwiseDistance:
+                    suggested_architecture.append(f"network.add({layer.__name__}(p=2, eps=1e-6, keepdim=True))")
+                    next_size = current_size
+                elif layer == Embedding:
+                    suggested_architecture.append(
+                        f"network.add({layer.__name__}(vocab_size=5000, embedding_dim={current_size}))")
+                    next_size = current_size
+                else:
+                    next_size = min(current_size * 2, 512)
+                    if not self._is_safe_size(next_size):
+                        continue  # Skip if the next size is not safe
+                    suggested_architecture.append(f"network.add({layer.__name__}({current_size}, {next_size}))")
+
+                current_size = next_size
+
+                activation = self._choose_activation(activation_layers, temperature)
+                suggested_architecture.append(self._format_activation(activation))
+                regularization_applied = False
+
+                if random.random() < 0.3:
+                    norm_layer = BatchNormLayer
+                    suggested_architecture.append(f"network.add({norm_layer.__name__}(num_features={current_size}))")
+
+                    if not regularization_applied and random.random() < 0.5:
+                        reg_layer = random.choice(regularization_layers)
+                        suggested_architecture.append(
+                            f"network.add({reg_layer.__name__}(layer=network.layers[-1], lambda_=0.01))")
+                        regularization_applied = True
+
+                if random.random() < 0.2:
+                    suggested_architecture.append(f"network.add(DropoutLayer())")
+
+            except Exception as e:
+                print(f"Error adding layer: {e}")
+                self.error_history.append(str(e))
+                continue
+
+        if data_type != 'tabular':
+            suggested_architecture.append(f"network.add(Flatten())")
+        suggested_architecture.append(f"network.add(DenseLayer({current_size}, {output_size}))")
+
+        suggested_architecture.append(self._get_final_activation(task_type))
+
+        if task_type == 'classification' or data_type == 'image':
+            optimizer = "AdamOptimizer(lr=0.001, beta1=0.9, beta2=0.999, epsilon=1e-8)"
+        elif task_type == 'regression' or data_type == 'sequence':
+            optimizer = "NadamOptimizer(epsilon=1e-8)"
+        else:
+            optimizer = "AdadeltaOptimizer(epsilon=1e-8)"
+
+        return suggested_architecture, optimizer
+
+    def _choose_activation(self, activation_layers, temperature):
+        if temperature < 0.5:
+            return ReLUActivationLayer
+        elif temperature > 1.5:
+            return LeakyReLUActivationLayer
+        else:
+            return random.choice(activation_layers)
+
+    def _format_activation(self, activation):
+        if activation in [LeakyReLUActivationLayer, SELUActivationLayer]:
+            return f"network.add({activation.__name__}(alpha=0.1))"
+        else:
+            return f"network.add({activation.__name__}())"
+
+    def _get_final_activation(self, task_type):
+        if task_type == 'classification':
+            return "network.add(SoftmaxActivationLayer())"
+        elif task_type == 'regression':
+            return "network.add(LinearActivationLayer())"
+        else:
+            raise ValueError(f"Unsupported task type: {task_type}")
+
+    def apply_suggested_architecture(self, input_size, output_size, task_type='classification', data_type='tabular',
+                                     depth=3):
+        suggested_architecture, suggested_optimizer = self.suggest_architecture(input_size, output_size, task_type,
+                                                                                data_type, depth)
+        for layer_str in suggested_architecture:
+            exec(layer_str, globals(), {'network': self})
+
+        return suggested_architecture, suggested_optimizer
+
+    def train_with_suggested_architecture(self, inputs, targets, input_size, output_size, optimizer=None,
+                                          task_type='classification', data_type='tabular', depth=3, epochs=100,
+                                          lr=0.01, batch_size=32):
+        self._check_breakpoint('train_with_suggested_architecture', inputs, targets, input_size, output_size,
+                               task_type, data_type, depth, epochs, lr, batch_size)
+
+        suggested_architecture, suggested_optimizer = self.apply_suggested_architecture(input_size, output_size,
+                                                                                        task_type, data_type, depth)
+        # Print the suggested architecture
+        print("Applied Architecture:")
+        for layer in suggested_architecture:
+            print(layer)
+
+        # Print the suggested optimizer
+        print(f"Suggested Optimizer: {suggested_optimizer}")
+
+        # Use suggested optimizer if none is provided
+        if optimizer is None:
+            optimizer = suggested_optimizer
+
+        # Prepare inputs and targets
+        if not isinstance(inputs, Tensor):
+            inputs = Tensor(np.array(inputs))
+        if not isinstance(targets, Tensor):
+            targets = Tensor(np.array(targets))
+
+        # Choose appropriate loss function
+        if task_type == 'classification':
+            loss_function = CrossEntropyLoss()
+        elif task_type == 'image':
+            loss_function = MeanAbsoluteError()
+        else:  # regression
+            loss_function = MSELoss()
+
+        # Train the network
+        losses = self.train(inputs, targets, epochs, lr, optimizer, batch_size, loss_function)
+
+        # Plot the training loss
+        self.plot_loss(losses)
+
+        return losses
+
+    def rank_network_performance(self, test_inputs, test_targets, temperature, task_type='classification',
+                                 creativity_threshold=0.5):
+        self._check_breakpoint('rank_network_performance', test_inputs, test_targets, temperature, task_type,
+                               creativity_threshold)
+
+        # Start timing
+        start_time = time.time()
+
+        # Start memory tracking
+        process = psutil.Process()
+        start_memory = process.memory_info().rss
+
+        # Set the network's temperature
+        self.set_temperature(temperature)
+
+        # Forward pass
+        outputs = self.forward(Tensor(test_inputs))
+
+        # Calculate loss
+        if task_type == 'classification':
+            loss_function = CrossEntropyLoss()
+        else:  # regression
+            loss_function = MSELoss()
+
+        loss = loss_function.forward(outputs, Tensor(test_targets))
+
+        # Calculate accuracy
+        if task_type == 'classification':
+            predictions = np.argmax(outputs.data, axis=1)
+            accuracy = np.mean(predictions == np.argmax(test_targets, axis=1))
+        else:
+            accuracy = 1.0 - np.mean(np.abs(outputs.data - test_targets) / test_targets)
+
+        # Calculate output diversity (as a simple measure of creativity)
+        output_diversity = np.std(outputs.data)
+
+        # Determine expected creativity level based on temperature
+        expected_creativity = 1.0 if temperature > 1.0 else 0.0 if temperature < 1.0 else 0.5
+
+        # Calculate creativity alignment score
+        creativity_alignment = 1.0 - abs(output_diversity - expected_creativity)
+
+        # Calculate overall performance score
+        performance_score = (accuracy * (1 - creativity_threshold) +
+                             creativity_alignment * creativity_threshold)
+
+        # Rank the performance
+        if performance_score > 0.8:
+            rank = "Excellent"
+        elif performance_score > 0.6:
+            rank = "Good"
+        elif performance_score > 0.4:
+            rank = "Fair"
+        else:
+            rank = "Poor"
+
+        # Stop timing and memory tracking
+        end_time = time.time()
+        end_memory = process.memory_info().rss
+
+        # Calculate elapsed time and memory usage
+        elapsed_time = end_time - start_time
+        memory_usage = (end_memory - start_memory) / (1024 ** 2)  # Convert bytes to MB
+
+        result = {
+            "temperature": temperature,
+            "loss": float(np.mean(loss)),
+            "accuracy": float(accuracy),
+            "output_diversity": float(np.array(outputs.data).std().get()),
+            "creativity_alignment": float(creativity_alignment),
+            "performance_score": float(performance_score),
+            "rank": rank,
+            "execution_time_seconds": elapsed_time,
+            "memory_usage_mb": memory_usage
+        }
+
+        self.logger.info(f"Performance Ranking: {result}")
+
+        return result
+
