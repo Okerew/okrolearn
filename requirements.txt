@@ -5,3 +5,4 @@ pandas
 matplotlib
 pillow
 opencv-python
+psutil
