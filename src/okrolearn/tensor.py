@@ -764,12 +764,13 @@ class Tensor:
         - xlabel: str, optional label for x-axis
         - ylabel: str, optional label for y-axis
         """
+
         plt.figure(figsize=(10, 6))
 
         if self.data.ndim == 1:
-            plt.plot(self.data)
+            plt.plot(self.data.get())
         elif self.data.ndim == 2:
-            plt.imshow(self.data, cmap='viridis')
+            plt.imshow(self.data.get(), cmap='viridis')
             plt.colorbar()
         else:
             raise ValueError("Can only plot 1D or 2D tensors")
@@ -794,7 +795,8 @@ class Tensor:
         - ylabel: str, optional label for y-axis
         """
         plt.figure(figsize=(10, 6))
-        plt.hist(self.data.flatten(), bins=bins)
+        h_data = self.data.get()
+        plt.hist(h_data.flatten(), bins=bins)
 
         if title:
             plt.title(title)
