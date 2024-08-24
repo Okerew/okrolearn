@@ -26,13 +26,14 @@ classifiers = [
 ]
 dependencies = [
   "numpy",
-  "cupy",
   "statsmodels",
   "pandas",
   "matplotlib",
   "scipy",
   "pillow",
-  "opencv-python"
+  "opencv-python",
+  "cupy",
+  "psutil"
 ]
 
 [project.urls]
