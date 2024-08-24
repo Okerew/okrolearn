@@ -6,3 +6,4 @@ matplotlib
 opencv-python
 pillow
 cupy
+psutil
