@@ -1,5 +1,6 @@
 from okrolearn.okrolearn import np
 
+
 class AdamOptimizer:
     # Generate doctstring codeium
     """
@@ -144,3 +145,34 @@ class SGDOptimizer:
 
         layer.grad = np.zeros_like(grad)
         layer.backward_fn = None
+
+
+class RMSPropOptimizer:
+    """
+    Parameters
+    ----------
+    lr : float
+        Learning rate
+    beta : float
+        Exponential decay rate for the second moment estimates
+    epsilon : float
+        Constant for numerical stability
+    """
+
+    def __init__(self, lr=0.001, beta=0.9, epsilon=1e-8):
+        self.lr = lr
+        self.beta = beta
+        self.epsilon = epsilon
+        self.v = {}
+
+    def update(self, layer, grad, key):
+        if key not in self.v:
+            self.v[key] = np.zeros_like(grad)
+
+        self.v[key] = self.beta * self.v[key] + (1 - self.beta) * (grad ** 2)
+
+        update = self.lr * grad / (np.sqrt(self.v[key]) + self.epsilon)
+        layer -= update
+
+    def reset(self):
+        self.v = {}
