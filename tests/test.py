@@ -1,5 +1,5 @@
 from okrolearn.okrolearn import *
-
+from okrolearn.optimizers import SGDOptimizer
 
 def print_epoch_start(epoch, total_epochs):
     print(f"Starting epoch {epoch + 1}/{total_epochs}")
@@ -15,18 +15,15 @@ network.add_hook('pre_epoch', print_epoch_start)
 network.add(ReLUActivationLayer())
 network.add(DenseLayer(4, 4))
 network.add(LinearActivationLayer())
-network.analyze_gradients()
 network.add(LeakyReLUActivationLayer(alpha=0.1))
 network.add(DenseLayer(4, 3))
 network.add(ELUActivationLayer())
 network.add(SoftsignActivationLayer())
 network.add(HardTanhActivationLayer())
 network.remove(2)
-network.plot_parameter_changes()
 network.add(SoftmaxActivationLayer())
 network.add(ELUActivationLayer())
-network.analyze_gradients()
-
+network.add(SELUActivationLayer(alpha=0.1))
 
 inputs = Tensor(np.random.rand(100, 3))
 targets = Tensor(np.random.randint(0, 3, size=(100,)))
@@ -34,7 +31,9 @@ loss_function = CrossEntropyLoss()
 optimizer = SGDOptimizer(lr=0.01, momentum=0.9)
 
 
-losses = network.train(inputs, targets, epochs=5, lr=0.01, batch_size=10, loss_function=loss_function)
+losses = network.train(inputs, targets, epochs=2, lr=0.01, optimizer=optimizer, batch_size=10, loss_function=loss_function)
+network.plot_parameter_changes()
+network.analyze_gradients()
 network.print_profile_stats()
 network.stop_profiling()
 
@@ -44,9 +43,11 @@ network.plot_loss(losses)
 network.save('model.pt')
 
 test_network = NeuralNetwork()
+test_network.set_debug_mode(True)
 test_network.add(DenseLayer(3, 4))
 test_network.add_hook('pre_epoch', print_epoch_start)
 test_network.add(ReLUActivationLayer())
+test_network.analyze_gradients()
 test_network.add(DenseLayer(4, 4))
 test_network.add(LinearActivationLayer())
 test_network.add(LeakyReLUActivationLayer(alpha=0.1))
@@ -57,6 +58,7 @@ test_network.add(HardTanhActivationLayer())
 test_network.remove(2)
 test_network.add(SoftmaxActivationLayer())
 test_network.add(ELUActivationLayer())
+test_network.add(SELUActivationLayer(alpha=0.1))
 
 test_network.load('model.pt')
 
@@ -64,3 +66,7 @@ test_inputs = Tensor(np.random.rand(10, 3))
 test_outputs = test_network.forward(test_inputs)
 print(test_outputs)
 
+test_inputs.plot(title="Test Input", xlabel="Feature", ylabel="Value")
+
+# Visualize test output distribution
+test_outputs.histogram(title="Test Output Distribution", xlabel="Output Value", ylabel="Frequency")
