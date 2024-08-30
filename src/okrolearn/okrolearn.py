@@ -13,6 +13,7 @@ import logging
 from flask import jsonify, request, Flask
 import random
 import psutil
+from okrolearn.optimizers import AdamOptimizer, NadamOptimizer, AdadeltaOptimizer
 
 class DenseLayer:
     def __init__(self, input_size, output_size):
@@ -2710,6 +2711,61 @@ class SELUActivationLayer:
     def set_params(self, params):
         pass
 
+class LearningRateScheduler:
+    def __init__(self, initial_lr: float):
+        self.initial_lr = initial_lr
+        self.current_lr = initial_lr
+
+    def step(self, epoch: int) -> float:
+        # This is a basic scheduler that keeps the learning rate constant
+        return self.current_lr
+
+    def get_lr(self) -> float:
+        return self.current_lr
+
+
+class StepLRScheduler(LearningRateScheduler):
+    def __init__(self, initial_lr: float, step_size: int, gamma: float):
+        super().__init__(initial_lr)
+        self.step_size = step_size
+        self.gamma = gamma
+
+    def step(self, epoch: int) -> float:
+        self.current_lr = self.initial_lr * (self.gamma ** (epoch // self.step_size))
+        return self.current_lr
+
+
+class TimeBasedDecayScheduler(LearningRateScheduler):
+    def __init__(self, initial_lr: float, decay_rate: float):
+        super().__init__(initial_lr)
+        self.decay_rate = decay_rate
+
+    def step(self, epoch: int) -> float:
+        self.current_lr = self.initial_lr / (1 + self.decay_rate * epoch)
+        return self.current_lr
+
+
+class ExponentialDecayScheduler(LearningRateScheduler):
+    def __init__(self, initial_lr: float, decay_rate: float):
+        super().__init__(initial_lr)
+        self.decay_rate = decay_rate
+
+    def step(self, epoch: int) -> float:
+        self.current_lr = self.initial_lr * np.exp(-self.decay_rate * epoch)
+        return self.current_lr
+
+
+class LinearDecayScheduler(LearningRateScheduler):
+    def __init__(self, initial_lr: float, final_lr: float, total_epochs: int):
+        super().__init__(initial_lr)
+        self.final_lr = final_lr
+        self.total_epochs = total_epochs
+        self.decay_rate = (initial_lr - final_lr) / total_epochs
+
+    def step(self, epoch: int) -> float:
+        self.current_lr = max(self.final_lr, self.initial_lr - self.decay_rate * epoch)
+        return self.current_lr
+
 
 class NeuralNetwork:
     def __init__(self, temperature=1.0):
@@ -2854,22 +2910,23 @@ class NeuralNetwork:
 
         self.custom_kernels[kernel_name](grid, block, args)
 
-    def train(self, inputs: 'Tensor', targets: 'Tensor', epochs: int, lr: float, optimizer, batch_size: int, loss_function):
-        self._check_breakpoint('train', inputs, targets, epochs, lr, batch_size, loss_function)
+    def train(self, inputs: 'Tensor', targets: 'Tensor', epochs: int, lr_scheduler, optimizer, batch_size: int, loss_function):
+        self._check_breakpoint('train', inputs, targets, epochs, lr_scheduler.get_lr(), optimizer, batch_size, loss_function)
         if self.is_profiling:
-            return self._profiled_train(inputs, targets, epochs, lr, optimizer, batch_size, loss_function)
+            return self._profiled_train(inputs, targets, epochs, lr_scheduler, optimizer, batch_size, loss_function)
         else:
-            return self._train(inputs, targets, epochs, lr, optimizer, batch_size, loss_function)
+            return self._train(inputs, targets, epochs, lr_scheduler, optimizer, batch_size, loss_function)
 
-    def _profiled_train(self, inputs: 'Tensor', targets: 'Tensor', epochs: int, lr: float, optimizer, batch_size: int,
+    def _profiled_train(self, inputs: 'Tensor', targets: 'Tensor', epochs: int, lr_scheduler, optimizer, batch_size: int,
                         loss_function):
         self.profiler.enable()
-        result = self._train(inputs, targets, epochs, lr, optimizer, batch_size, loss_function)
+        result = self._train(inputs, targets, epochs, lr_scheduler, optimizer, batch_size, loss_function)
         self.profiler.disable()
         return result
 
-    def _train(self, inputs: 'Tensor', targets: 'Tensor', epochs: int, lr, optimizer, batch_size: int,
-               loss_function, clip_grad=None):
+    def _train(self, inputs: 'Tensor', targets: 'Tensor', epochs: int,
+              lr_scheduler, optimizer, batch_size: int,
+              loss_function, clip_grad: float = None):
         num_samples = inputs.data.shape[0]
         num_batches = int(np.ceil(num_samples / batch_size))
         losses = []
@@ -2878,6 +2935,20 @@ class NeuralNetwork:
             self._run_hooks('pre_epoch', epoch, epochs)
             epoch_loss = 0.0
             epoch_start_time = time.time()
+
+            # Update learning rate
+            current_lr = lr_scheduler.step(epoch)
+
+            # Update the optimizer's learning rate
+            if hasattr(optimizer, 'param_groups'):
+                for param_group in optimizer.param_groups:
+                    param_group['lr'] = current_lr
+            elif hasattr(optimizer, 'lr'):
+                optimizer.lr = current_lr
+            elif hasattr(optimizer, 'set_lr'):
+                optimizer.set_lr(current_lr)
+            else:
+                self.logger.warning("Unable to update optimizer's learning rate. Scheduler may not have an effect.")
 
             # Shuffle the data at the beginning of each epoch
             indices = np.arange(num_samples)
@@ -2901,7 +2972,7 @@ class NeuralNetwork:
 
                 # Backward pass
                 loss_gradient = loss_function.backward(outputs, batch_targets)
-                self.backward(loss_gradient, lr)
+                self.backward(loss_gradient, current_lr)
 
                 # Gradient clipping (if specified)
                 if clip_grad is not None:
@@ -2914,7 +2985,6 @@ class NeuralNetwork:
                             grad = layer.gradients[key]
                             optimizer.update(param, grad, f"layer_{i}_{key}")
 
-
             avg_loss = epoch_loss / num_batches
             losses.append(avg_loss)
 
@@ -2923,7 +2993,7 @@ class NeuralNetwork:
             epoch_end_time = time.time()
 
             self.logger.info(
-                f"Epoch {epoch + 1}/{epochs} - Loss: {avg_loss:.4f} - Time: {epoch_end_time - epoch_start_time:.2f}s")
+                f"Epoch {epoch + 1}/{epochs} - Loss: {avg_loss:.4f} - LR: {current_lr:.6f} - Time: {epoch_end_time - epoch_start_time:.2f}s")
             self._run_hooks('post_epoch', epoch, epochs, avg_loss)
 
         return losses
@@ -3114,11 +3184,12 @@ class NeuralNetwork:
             inputs = Tensor(np.array(data['inputs']))
             targets = Tensor(np.array(data['targets']))
             epochs = int(data['epochs'])
-            lr = float(data['lr'])
+            lr_scheduler = data.get('lr_scheduler', 'LearningRateScheduler(0.1)')
             batch_size = int(data['batch_size'])
             optimizer = data.get('optimizer', 'SGDOptimizer')
 
-            losses = self.train(inputs, targets, epochs, lr, optimizer, batch_size, loss_function=self.loss_function)
+            losses = self.train(inputs, targets, epochs, lr_scheduler, optimizer, batch_size,
+                                loss_function=self.loss_function)
             return jsonify({'losses': losses})
 
         @self.app.route('/save_model', methods=['POST'])
@@ -3266,13 +3337,20 @@ class NeuralNetwork:
         suggested_architecture.append(self._get_final_activation(task_type))
 
         if task_type == 'classification' or data_type == 'image':
-            optimizer = "AdamOptimizer(lr=0.001, beta1=0.9, beta2=0.999, epsilon=1e-8)"
+            optimizer = AdamOptimizer(lr=0.001, beta1=0.9, beta2=0.999, epsilon=1e-8)
+            scheduler = StepLRScheduler(initial_lr=0.001, step_size=30, gamma=0.1)
         elif task_type == 'regression' or data_type == 'sequence':
-            optimizer = "NadamOptimizer(epsilon=1e-8)"
+            optimizer = NadamOptimizer(epsilon=1e-8)
+            scheduler = ExponentialDecayScheduler(initial_lr=0.001, decay_rate=0.1)
         else:
-            optimizer = "AdadeltaOptimizer(epsilon=1e-8)"
+            optimizer = AdadeltaOptimizer(epsilon=1e-8)
+            scheduler = TimeBasedDecayScheduler(initial_lr=0.001, decay_rate=0.01)
 
-        return suggested_architecture, optimizer
+            # Add more specific scheduler selection based on network depth
+        if depth > 5:
+            scheduler = LinearDecayScheduler(initial_lr=0.001, final_lr=0.0001, total_epochs=100)
+
+        return suggested_architecture, optimizer, scheduler
 
     def _choose_activation(self, activation_layers, temperature):
         if temperature < 0.5:
@@ -3298,20 +3376,21 @@ class NeuralNetwork:
 
     def apply_suggested_architecture(self, input_size, output_size, task_type='classification', data_type='tabular',
                                      depth=3):
-        suggested_architecture, suggested_optimizer = self.suggest_architecture(input_size, output_size, task_type,
+        suggested_architecture, suggested_optimizer, suggested_scheduler = self.suggest_architecture(input_size, output_size, task_type,
                                                                                 data_type, depth)
         for layer_str in suggested_architecture:
             exec(layer_str, globals(), {'network': self})
 
-        return suggested_architecture, suggested_optimizer
+        return suggested_architecture, suggested_optimizer, suggested_scheduler
 
-    def train_with_suggested_architecture(self, inputs, targets, input_size, output_size, optimizer=None,
+    def train_with_suggested_architecture(self, inputs, targets, input_size, output_size, lr_scheduler=LearningRateScheduler(0.01), optimizer=None,
                                           task_type='classification', data_type='tabular', depth=3, epochs=100,
-                                          lr=0.01, batch_size=32):
-        self._check_breakpoint('train_with_suggested_architecture', inputs, targets, input_size, output_size,
-                               task_type, data_type, depth, epochs, lr, batch_size)
+                                          batch_size=32):
 
-        suggested_architecture, suggested_optimizer = self.apply_suggested_architecture(input_size, output_size,
+        self._check_breakpoint('train_with_suggested_architecture', inputs, targets, input_size, output_size,
+                               task_type, data_type, depth, epochs, lr_scheduler.get_lr(), batch_size)
+
+        suggested_architecture, suggested_optimizer, suggested_scheduler = self.apply_suggested_architecture(input_size, output_size,
                                                                                         task_type, data_type, depth)
         # Print the suggested architecture
         print("Applied Architecture:")
@@ -3321,9 +3400,15 @@ class NeuralNetwork:
         # Print the suggested optimizer
         print(f"Suggested Optimizer: {suggested_optimizer}")
 
+        # Print the suggested scheduler
+        print(f"Suggested Scheduler: {suggested_scheduler}")
+
         # Use suggested optimizer if none is provided
         if optimizer is None:
             optimizer = suggested_optimizer
+
+        if isinstance(lr_scheduler, LearningRateScheduler):
+            lr_scheduler = suggested_scheduler
 
         # Prepare inputs and targets
         if not isinstance(inputs, Tensor):
@@ -3340,7 +3425,7 @@ class NeuralNetwork:
             loss_function = MSELoss()
 
         # Train the network
-        losses = self.train(inputs, targets, epochs, lr, optimizer, batch_size, loss_function)
+        losses = self.train(inputs, targets, epochs, lr_scheduler, optimizer, batch_size, loss_function)
 
         # Plot the training loss
         self.plot_loss(losses)
@@ -3426,4 +3511,53 @@ class NeuralNetwork:
         self.logger.info(f"Performance Ranking: {result}")
 
         return result
+
+    def hyperparameter_tuning(self, inputs, targets, hyperparameters, epochs=100, batch_size=32, loss_function=None):
+        """
+        Perform hyperparameter tuning by training the network with different sets of hyperparameters.
+
+        Args:
+            inputs (Tensor): Input data.
+            targets (Tensor): Target data.
+            hyperparameters (list of dict): List of dictionaries containing hyperparameters to tune.
+            epochs (int): Number of epochs to train for each set of hyperparameters.
+            batch_size (int): Batch size for training.
+            loss_function (LossFunction): Loss function to use for training.
+
+        Returns:
+            best_hyperparameters (dict): The set of hyperparameters that resulted in the lowest loss.
+            best_loss (float): The lowest loss achieved.
+        """
+        best_loss = float('inf')
+        best_hyperparameters = None
+
+        for params in hyperparameters:
+            self._check_breakpoint('hyperparameter_tuning', inputs, targets, params, epochs, batch_size, loss_function)
+
+            # Set the hyperparameters
+            lr_scheduler = params.get('lr_scheduler', LearningRateScheduler(0.01))
+            optimizer = params.get('optimizer', AdamOptimizer())
+            temperature = params.get('temperature', 1.0)
+
+            self.set_temperature(temperature)
+
+            # Train the network
+            losses = self.train(inputs, targets, epochs, lr_scheduler, optimizer, batch_size, loss_function)
+
+            losses_array = np.array(losses)
+
+            # Calculate the average loss
+            avg_loss = np.mean(losses_array)
+
+            # Update the best hyperparameters if this set resulted in a lower loss
+            if avg_loss < best_loss:
+                best_loss = avg_loss
+                best_hyperparameters = params
+
+            self.logger.info(f"Hyperparameters: {params} - Average Loss: {avg_loss:.4f}")
+
+        self.logger.info(f"Best Hyperparameters: {best_hyperparameters} - Best Loss: {best_loss:.4f}")
+
+        return best_hyperparameters, best_loss
+
 
