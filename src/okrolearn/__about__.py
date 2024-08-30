@@ -1,7 +1,7 @@
 __title__ = 'okrolearn'
 __description__ = 'A machine learning library by Okerew, which is a raw implementation of combining scikit-learn and pytorch'
 __url__ = 'https://github.com/Okerew/okrolearn'
-__version__ = '0.2.5'
+__version__ = '0.2.7'
 __author__ = 'Okerew'
 __author_email__ = 'okerewgroup@proton.me'
 __license__ = 'MIT'
